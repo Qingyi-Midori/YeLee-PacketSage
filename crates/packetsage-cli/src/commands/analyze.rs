@@ -146,45 +146,6 @@ fn base_config(loaded: &Loaded, settings: &Settings) -> EngineConfig {
     config
 }
 
-/// Analyses a capture into `task_id` quietly and persists it.
-///
-/// Used by the `chat` launcher: the agent's `serve` worker runs in another
-/// process, so the task has to exist in the database before the session starts
-/// (ADR-019 cold recovery). Returns the exit code and the rendered message of
-/// the first failure instead of printing, so the caller owns the UX.
-pub(crate) fn analyze_task(
-    capture: &std::path::Path,
-    task_id: &TaskId,
-    loaded: &Loaded,
-    settings: &Settings,
-) -> Result<(), (ExitCode, String)> {
-    let config = base_config(loaded, settings);
-    let rules = build_rules_for(&config, false);
-    let sink: Box<dyn EventSink> = Box::new(CountingSink::default());
-    let mut pipeline = AnalyzePipeline::new(config, sink);
-    pipeline.rules = rules;
-    let started_at = now_rfc3339();
-    let context = Context::default()
-        .with_path(capture)
-        .with_url(&settings.db_url)
-        .with_task(task_id.as_str());
-    let result = pipeline
-        .run(capture, task_id, &started_at)
-        .map_err(|error| {
-            let rendered = errors::render(&error, &context, false);
-            (ExitCode::from(error), rendered)
-        })?;
-    persist(&result, &settings.db_url).map_err(|message| {
-        (
-            ExitCode::ConfigError,
-            format!(
-                "packetsage: {}: {message}; if a migration is missing run `packetsage db migrate`",
-                settings.db_url
-            ),
-        )
-    })
-}
-
 fn persist(result: &packetsage_core::AnalysisResult, url: &str) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
