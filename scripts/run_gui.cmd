@@ -1,6 +1,6 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem PacketSage GUI launcher (double-clickable, same spirit as run_cli.cmd):
+rem Streamlit 原型启动器（双击可用；原型已冻结为参考实现，不是交付物）：
 rem print the title, pick the engine, start Streamlit, keep the window open.
 rem
 rem   double-click                          -> title + Streamlit on :8501

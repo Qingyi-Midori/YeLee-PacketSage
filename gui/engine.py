@@ -107,7 +107,7 @@ def doctor_failure_hint() -> str:
     """引擎不可用时的 §5.1 修法提示。"""
     return (
         "先在仓库根构建引擎：`powershell -ExecutionPolicy Bypass -File "
-        "scripts/build.ps1 -CargoArgs --release`，或用 `scripts/install_smoke.py` 装一份。"
+        "scripts/build.ps1 -CargoArgs --release`。"
     )
 
 

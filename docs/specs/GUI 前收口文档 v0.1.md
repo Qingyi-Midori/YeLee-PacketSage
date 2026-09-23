@@ -19,7 +19,7 @@
 | GUI 范围 | **本文档不含 GUI 的设计与实现**。技术栈（Tauri + Rust/Python 双 sidecar）、进程与数据交换协议、集成项 U1–U10、打包分发、界面验收（S57–S70、M1–M24）均在《[GUI 工程规格书 v0.2](GUI%20工程规格书%20v0.2.md)》；分工见本文 §1.4 |
 | 基线 | 工作区尚未 `git init`；基线 = 2026-09-20 本机构建（`target/release/packetsage.exe`，built=2026-09-20T06:24:08Z）+ 本次 B1–B3 改动后的复测 |
 | 本机环境 | Windows 11 26200 / rustc 1.98.1 `x86_64-pc-windows-gnu` / Python 3.14.3 |
-| 上游文档 | 《开发文档 v0.3》《M0～M2 Rust 工程规格书》《M3～M6 工程规格书 v0.2》《CLI 收口工程规格书 v0.2》《Agent CLI 工程规格书 v0.1》《Agent 系统提示词规格 v0.1》，以及同步点 [S1–S4](CLI%20收口同步点%20S1-S4.md) / [S5–S6](Agent%20提示词同步点%20S5-S6.md) / [S7–S8](Agent%20CLI%20同步点%20S7-S8.md) |
+| 上游文档 | 《开发文档 v0.3》《M0～M2 Rust 工程规格书》《M3～M6 工程规格书 v0.2》《CLI 收口工程规格书 v0.2》《Agent CLI 工程规格书 v0.1》《Agent 系统提示词规格 v0.1》，以及同步点 [S1–S4](../archive/CLI%20收口同步点%20S1-S4.md) / [S5–S6](Agent%20提示词同步点%20S5-S6.md) / [S7–S8](../archive/Agent%20CLI%20同步点%20S7-S8.md) |
 
 ---
 

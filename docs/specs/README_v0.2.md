@@ -1,15 +1,15 @@
 # YeLee' PacketSage 🛡️
 
 > **⚠️ 已过期（归档）：** 本文件是 v0.2 设计稿，复选框与“未实现”标注均早于当前代码。
-> 现状、命令面与验收判据以 [README.md](../../README.md) 和
-> [GUI 前收口文档 v0.1](GUI%20前收口文档%20v0.1.md) §3 为准；本文件只保留设计沿革，不再更新。
+> 现状、命令面与验收判据以 [README.md((../../README.md) 和
+> [GUI 前收口文档 v0.1((GUI%20前收口文档%20v0.1.md) §3 为准；本文件只保留设计沿革，不再更新。
 > 当前测试基线与机器出口见 `GUI 前收口文档 v0.1` §2.1 / §5。
 
 > 一个面向课程项目与网络安全实验的 **LLM Agent 网络协议分析工具**：把 PCAP/PCAPNG 的结构化分析结果交给 Agent，让它自己决定下一步应该查看什么证据，并最终生成可追溯的分析报告。
 
-[![Core](https://img.shields.io/badge/core-Rust-orange?logo=rust)](https://www.rust-lang.org/)
-[![Agent](https://img.shields.io/badge/agent-Python-blue?logo=python)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Core((https://img.shields.io/badge/core-Rust-orange?logo=rust)((https://www.rust-lang.org/)
+[![Agent((https://img.shields.io/badge/agent-Python-blue?logo=python)((https://www.python.org/)
+[![License((https://img.shields.io/badge/license-MIT-green)((LICENSE)
 
 > **项目状态：开发中 / v0.2 设计版**
 >
@@ -137,35 +137,35 @@ MVP 默认只分析本地 PCAP/PCAPNG，不主动向第三方网站发送抓包�
 
 ### 必做
 
-- [x] 项目架构与数据契约设计
-- [ ] PCAP 读取
-- [ ] PCAPNG 读取
-- [ ] Ethernet / IPv4 / IPv6
-- [ ] TCP / UDP / ICMP / ICMPv6
-- [ ] ARP
-- [ ] DNS
-- [ ] HTTP/1.1 元数据
-- [ ] TLS 元数据
-- [ ] DHCP
-- [ ] TCP 流重组
-- [ ] 会话聚合
-- [ ] 协议统计
-- [ ] YAML 规则引擎
-- [ ] SYN Flood / 端口扫描 / DNS 可疑行为 / 畸形包规则
-- [ ] Python Agent 工具集
-- [ ] Markdown 报告
-- [ ] SQLite 历史记录
-- [ ] 单元测试 / 集成测试 / 规则测试
+- [x( 项目架构与数据契约设计
+- [ ( PCAP 读取
+- [ ( PCAPNG 读取
+- [ ( Ethernet / IPv4 / IPv6
+- [ ( TCP / UDP / ICMP / ICMPv6
+- [ ( ARP
+- [ ( DNS
+- [ ( HTTP/1.1 元数据
+- [ ( TLS 元数据
+- [ ( DHCP
+- [ ( TCP 流重组
+- [ ( 会话聚合
+- [ ( 协议统计
+- [ ( YAML 规则引擎
+- [ ( SYN Flood / 端口扫描 / DNS 可疑行为 / 畸形包规则
+- [ ( Python Agent 工具集
+- [ ( Markdown 报告
+- [ ( SQLite 历史记录
+- [ ( 单元测试 / 集成测试 / 规则测试
 
 ### 暂不做
 
-- [ ] 实时抓包
-- [ ] Web 前端
-- [ ] TLS 解密
-- [ ] 完整 HTTP/2 / HTTP/3 协议栈
-- [ ] DPI / 深度内容分类
-- [ ] 多 Agent 协作
-- [ ] 自动处置网络攻击
+- [ ( 实时抓包
+- [ ( Web 前端
+- [ ( TLS 解密
+- [ ( 完整 HTTP/2 / HTTP/3 协议栈
+- [ ( DPI / 深度内容分类
+- [ ( 多 Agent 协作
+- [ ( 自动处置网络攻击
 
 这些功能并非不可实现，而是为了避免课程项目在“解析器、数据库、Agent、Web、实时流量、模型调用”之间失去主线。
 
@@ -344,11 +344,11 @@ scope: packet
 match:
   protocol: tcp
   flags:
-    contains: [SYN]
-    excludes: [ACK]
+    contains: [SYN(
+    excludes: [ACK(
 threshold:
   metric: count
-  group_by: [src_ip]
+  group_by: [src_ip(
   window: 10s
   operator: gt
   value: 100

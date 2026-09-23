@@ -8,8 +8,8 @@
 
 | S# | 规格要求 | 落点 | 证据 |
 |---|---|---|---|
-| S7 | M3~M6v0.2 §4.1 标注"命令面权威定义见《Agent CLI 工程规格书》"；收口 v0.2 §10 标注"REPL 细则已收编" | [M3～M6 工程规格书 v0.2.md](M3～M6%20工程规格书%20v0.2.md) §4.1 同步点块；[CLI 收口工程规格书 v0.2.md](CLI%20收口工程规格书%20v0.2.md) §10 首行 | 本文件 §4 的测试矩阵全绿 |
-| S8 | 开发文档 §24 / M2v0.2§9.3 的 `agent.max_` 键名回填为 `max_tokens_total` | [开发文档 v0.3.md](开发文档%20v0.3.md) §24 示例 + 同步点块 | `agent/tests/test_cli.py::test_token_budget_accepts_both_spellings` |
+| S7 | M3~M6v0.2 §4.1 标注"命令面权威定义见《Agent CLI 工程规格书》"；收口 v0.2 §10 标注"REPL 细则已收编" | [M3～M6 工程规格书 v0.2.md](../specs/M3～M6%20工程规格书%20v0.2.md) §4.1 同步点块；[CLI 收口工程规格书 v0.2.md](CLI%20收口工程规格书%20v0.2.md) §10 首行 | 本文件 §4 的测试矩阵全绿 |
+| S8 | 开发文档 §24 / M2v0.2§9.3 的 `agent.max_` 键名回填为 `max_tokens_total` | [开发文档 v0.3.md](../specs/开发文档%20v0.3.md) §24 示例 + 同步点块 | `agent/tests/test_cli.py::test_token_budget_accepts_both_spellings` |
 
 ## 2. 待验证项回填（§13 #41–#43）
 

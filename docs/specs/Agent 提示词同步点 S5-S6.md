@@ -1,7 +1,7 @@
 # Agent 提示词同步点 S5–S6（《Agent 系统提示词规格 v0.1》§7 / §8 执行记录）
 
 记录 SYSTEM_PROMPT v2 的落地：文本来源、渲染契约、同步点落点、验证证据与
-实施中的显式追加。逐条命令面契约见 [Agent CLI 同步点 S7-S8.md](Agent%20CLI%20同步点%20S7-S8.md)。
+实施中的显式追加。逐条命令面契约见 [Agent CLI 同步点 S7-S8.md((Agent%20CLI%20同步点%20S7-S8.md)。
 
 ## 1. 文本来源（不手抄）
 
@@ -12,12 +12,12 @@
 | `agent/packetsage_agent/prompts_text/chat_zh.txt` | `System Prompt-v0.1.txt`（工作目录内的中文提示词） | chat 模式追加的中文回答格式（见 §4） |
 
 抽取是"从规格文本到包内数据文件"的机械操作，没有人手转写，因此
-`PROMPTS["v2"]` 与规格 §2 逐字节一致（`tests/test_prompts.py` 用渲染快照锁定）。
+`PROMPTS["v2"(` 与规格 §2 逐字节一致（`tests/test_prompts.py` 用渲染快照锁定）。
 
 ## 2. 渲染契约（§4）
 
 ```python
-render_system_prompt(task_id: str, mode: Literal["run", "chat"] = "run",
+render_system_prompt(task_id: str, mode: Literal["run", "chat"( = "run",
                      version: str | None = None) -> str
 ```
 
@@ -32,7 +32,7 @@ render_system_prompt(task_id: str, mode: Literal["run", "chat"] = "run",
 | S# | 规格要求 | 落点 | 证据 |
 |---|---|---|---|
 | S5 | config 示例默认 `agent.prompt_version: "v1"` → `"v2"`（值级修订） | **目标文档（M2v0.2§9.3）不在本仓库**，故在此留痕：默认值由 `prompts.DEFAULT_PROMPT_VERSION` 单点定义，`config.py` 校验取值、`report.py` 回填落库 | `tests/test_prompts.py::test_both_versions_ship_and_v2_is_the_default`、`tests/test_report.py::test_report_carries_the_selected_prompt_version` |
-| S6 | M3~M6v0.2§4.5 标注"v1 由 v2 取代（v1 保留）"；开发文档 §16 标注"最低基线，v2 为超集实现" | [M3～M6 工程规格书 v0.2.md](M3～M6%20工程规格书%20v0.2.md) §4.5 同步点块；[开发文档 v0.3.md](开发文档%20v0.3.md) §16 同步点块 | 同上 + `cargo test --workspace` 不受影响（prompt 不在 Rust 侧） |
+| S6 | M3~M6v0.2§4.5 标注"v1 由 v2 取代（v1 保留）"；开发文档 §16 标注"最低基线，v2 为超集实现" | [M3～M6 工程规格书 v0.2.md((M3～M6%20工程规格书%20v0.2.md) §4.5 同步点块；[开发文档 v0.3.md((开发文档%20v0.3.md) §16 同步点块 | 同上 + `cargo test --workspace` 不受影响（prompt 不在 Rust 侧） |
 
 ## 4. 显式追加：chat 模式的中文回答格式
 

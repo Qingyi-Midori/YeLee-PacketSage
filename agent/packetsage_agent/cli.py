@@ -68,7 +68,7 @@ SETUP_HINT = (
     "不进 config、不进 git），再 `packetsage doctor` 复核"
 )
 TASK_HINT = (
-    "先 `packetsage analyze` 或 `packetsage chat` 创建该 task，"
+    "先 `packetsage analyze`（或桌面应用里的「打开抓包」）创建该 task，"
     "再用 --task-id 引用它"
 )
 
@@ -1196,7 +1196,7 @@ def cmd_setup(args: argparse.Namespace, context: Context) -> int:
     print()
     print("下一步:")
     print("  packetsage doctor                                  # 复核生效配置")
-    print("  packetsage chat samples/synth-mixed.pcap            # 交互式调查")
+    print("  packetsage analyze samples/synth-mixed.pcap --db sqlite://packetsage.db")
     print("  packetsage-agent run --task-id <task_…>             # 批式调查")
     if verified is False:
         print()

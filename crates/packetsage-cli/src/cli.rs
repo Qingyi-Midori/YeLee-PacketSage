@@ -24,8 +24,7 @@ use clap::{Args, Parser, Subcommand};
     after_help = "Examples:\n  \
         packetsage analyze samples/synth-mixed.pcap\n  \
         packetsage analyze samples/synth-mixed.pcap --jsonl > events.jsonl\n  \
-        packetsage db query --readonly --sql \"SELECT id, status FROM analysis_tasks\"\n  \
-        packetsage chat samples/synth-mixed.pcap\n\n\
+        packetsage db query --readonly --sql \"SELECT id, status FROM analysis_tasks\"\n\n\
         Exit codes: 0 ok, 1 usage, 2 capture, 3 config/db/llm, 4 internal, 5 unsupported."
 )]
 pub struct Cli {
@@ -66,12 +65,8 @@ pub enum Command {
     Db(DbArgs),
     /// List or validate rules.
     Rules(RulesArgs),
-    /// Interactive agent session (launcher for the Python agent).
-    Chat(ChatArgs),
     /// Print the event / RPC schema digest.
     Schema,
-    /// Print a shell completion script.
-    Completions(CompletionsArgs),
 }
 
 /// `version` arguments.
@@ -291,47 +286,3 @@ pub enum RulesKind {
     },
 }
 
-/// `chat` arguments.
-#[derive(Debug, Args)]
-#[command(after_help = "Example:\n  \
-    packetsage chat samples/synth-mixed.pcap\n\n\
-    The Python agent is resolved through $PACKETSAGE_AGENT_BIN, PATH (packetsage-agent),\n\
-    ./agent/.venv, then `python -m packetsage_agent`.")]
-pub struct ChatArgs {
-    /// Capture file.
-    pub capture: PathBuf,
-    /// Python interpreter used by the `python -m` fallback launcher step.
-    #[arg(long, default_value = "python")]
-    pub python: String,
-    /// Database URL the analysed task is persisted to and recovered from.
-    ///
-    /// The agent drives its own `serve` worker, which recovers the task from
-    /// this database (ADR-019); default: `storage.url` / `$PACKETSAGE_STORAGE_URL`.
-    #[arg(long, value_name = "URL")]
-    pub db: Option<String>,
-    /// Provider.
-    #[arg(long)]
-    pub provider: Option<String>,
-    /// Model.
-    #[arg(long)]
-    pub model: Option<String>,
-    /// Reuse an already analysed (persisted) task instead of analysing again.
-    #[arg(long)]
-    pub task_id: Option<String>,
-    /// Evaluation scenario for the mock provider.
-    #[arg(long)]
-    pub scenario: Option<String>,
-    /// Generate a report when the session ends.
-    #[arg(long, value_name = "PATH")]
-    pub report: Option<PathBuf>,
-}
-
-/// `completions` arguments.
-#[derive(Debug, Args)]
-#[command(after_help = "Example (zsh):\n  \
-    packetsage completions zsh > ~/.zfunc/_packetsage")]
-pub struct CompletionsArgs {
-    /// Shell to generate the completion script for.
-    #[arg(value_enum, value_name = "SHELL")]
-    pub shell: clap_complete::Shell,
-}

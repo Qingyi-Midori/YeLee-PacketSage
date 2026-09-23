@@ -1,0 +1,28 @@
+# 行尾统一：仓库里一律存 LF，检出时也只有源码是 LF。
+#
+# 为什么需要这个：Windows 上 git 的 core.autocrlf 会把检出改成 CRLF，而
+# `migrations/*.sql` 的内容会被 sqlx 的 `migrate!` 宏按**字节**哈希成迁移校验和
+# （见 crates/packetsage-storage/src/sqlite.rs）。行尾一变，校验和就变，于是
+# 老库会报 "migration 1 was previously applied but has been modified"，
+# 任务再也写不进去。实测过一次（2026-09-23），所以把它钉死。
+* text=auto eol=lf
+
+# 这些必须是 LF
+*.sql   text eol=lf
+*.rs    text eol=lf
+*.toml  text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.py    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.css   text eol=lf
+
+# Windows 脚本/二进制保持各自的原样
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.ico   binary
+*.png   binary
+*.icns  binary

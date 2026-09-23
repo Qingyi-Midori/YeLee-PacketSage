@@ -1,8 +1,6 @@
 //! Sub-command implementations: parsing, assembly and formatting only.
 
 pub mod analyze;
-pub mod chat;
-pub mod completions;
 pub mod db;
 pub mod query;
 pub mod rules;

@@ -97,7 +97,6 @@ fn run(cli: &Cli) -> ExitCode {
     let palette = color::Palette::stdout(cli.no_color, machine);
     match command {
         Command::Version(args) => commands::version::run(args),
-        Command::Completions(args) => commands::completions::run(args),
         Command::Schema => {
             commands::schema::print_schema();
             ExitCode::Success
@@ -135,17 +134,6 @@ fn run(cli: &Cli) -> ExitCode {
             let settings = Settings::resolve(None, None, None, None, &loaded.config);
             dump_if_verbose(cli, loaded, &settings);
             commands::rules::run(args, &settings)
-        }),
-        Command::Chat(args) => with_config(cli, |loaded| {
-            let settings = Settings::resolve(
-                args.db.as_deref(),
-                None,
-                args.provider.as_deref(),
-                args.model.as_deref(),
-                &loaded.config,
-            );
-            dump_if_verbose(cli, loaded, &settings);
-            commands::chat::run(args, loaded, &settings, cli)
         }),
     }
 }
