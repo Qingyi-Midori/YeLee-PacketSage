@@ -221,7 +221,7 @@ class SidecarClient:
             {
                 "protocol_version": 1,
                 "client": "packetsage-desktop",
-                "client_version": "3.8.1",
+                "client_version": "4.0.0",
             },
         )
         if not ack.get("ok"):

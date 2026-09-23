@@ -46,7 +46,7 @@ jobs:
         working-directory: agent
         run: python -m ruff check .
       - name: GUI ruff (U8)
-        run: python -m ruff check gui tests/gui tests/sidecar --config gui/ruff.toml
+        run: python -m ruff check gui tests/sidecar --config gui/ruff.toml
       - name: mypy (G2-2)
         working-directory: agent
         run: python -m mypy
@@ -65,10 +65,6 @@ jobs:
         run: python tests/cli/gui_contract.py --binary target/release/packetsage
       - name: sidecar protocol S57-S70 (U1)
         run: python tests/sidecar/protocol_cases.py --binary target/release/packetsage
-      - name: GUI interface cases S57-S65 (U1-U8)
-        run: |
-          python -m pip install "streamlit>=1.40"
-          python tests/gui/app_cases.py --binary target/release/packetsage
       - name: E1-E6 mock evaluation
         run: python -m packetsage_agent.eval.run_eval --engine target/release/packetsage --capture samples/synth-mixed.pcap
         env:
@@ -102,4 +98,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release -p packetsage-cli
       - run: cargo run --release -p packetsage-fuzz --bin fuzz-smoke -- --seconds 60
-
+

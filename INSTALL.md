@@ -5,7 +5,7 @@
 
 ## 1. 装桌面应用
 
-1. **拿到安装包**：`YeLee’ PacketSage_3.8.1_x64-setup.exe`
+1. **拿到安装包**：`YeLee’ PacketSage_4.0.0_x64-setup.exe`
    - 构建产物在 `desktop/src-tauri/target/release/bundle/nsis/`；
    - 或自己打一份：`powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1`。
 2. **双击安装**：装到当前用户目录（NSIS `currentUser`，不弹 UAC）。

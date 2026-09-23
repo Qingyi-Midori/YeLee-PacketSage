@@ -46,7 +46,7 @@ pub fn target() -> &'static str {
 /// One line form, identical for `version` and `--version` (§5).
 ///
 /// ```text
-/// packetsage 3.8.1 (schema_version=2, git=1a2b3c4d, built=2026-09-20T03:40:00Z, profile=release)
+/// packetsage 4.0.0 (schema_version=2, git=1a2b3c4d, built=2026-09-20T03:40:00Z, profile=release)
 /// ```
 #[must_use]
 pub fn line() -> String {

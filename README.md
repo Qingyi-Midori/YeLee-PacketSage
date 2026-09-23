@@ -21,9 +21,9 @@ PCAP/PCAPNG 的结构化分析全部由 Rust 引擎完成，Python Agent 只做�
 |---|---|---|
 | 大更新 | 交付形态或契约变了（新命令面、新协议版本、架构改动） | `3.x.x` → `4.0.0` |
 | 小更新 | 能力增加但契约不变（新界面、新规则、新工具） | `3.8.x` → `3.9.0` |
-| bug | 只修问题（内测期最常出现） | `3.8.1` → `3.8.2` |
+| bug | 只修问题（内测期最常出现） | `4.0.0` → `3.8.2` |
 
-**当前版本 `3.8.1`**（内测期）；它是 git 之后的第一版，因此**从这一版起**按上面的规则递增。
+**当前版本 `4.0.0`**（内测期）；它是 git 之后的第一版，因此**从这一版起**按上面的规则递增。
 版本号只有两个权威落点，改的时候一起改，其余地方（安装包文件名、`packetsage version`、
 Agent 的 `--version`）都是从它们推导出来的：
 
@@ -36,7 +36,7 @@ Agent 的 `--version`）都是从它们推导出来的：
 
 **唯一交付形态是一个 Windows 安装包**，目标机不需要 Python / Rust / Node：
 
-1. 下载 `YeLee’ PacketSage_3.8.1_x64-setup.exe`；
+1. 下载 `YeLee’ PacketSage_4.0.0_x64-setup.exe`；
 2. 双击安装（装到当前用户目录，不弹 UAC）；
 3. 首次启动开向导：选 provider → 填 API key（存进 **Windows 凭据管理器**，不落明文）→ 保存并自检；
 4. 把 `.pcap` / `.pcapng` 拖进窗口，点「开始调查」。
@@ -126,13 +126,13 @@ docs/specs/                开发文档与各工程规格书；docs/archive/ 放
 * 规范化五元组会话聚合（双向收敛为一条）、TCP 重组（重传/乱序/缺口/超限/超时）；
 * 四条内置规则在合成样本上真实触发；JSONL 事件流、RPC 九工具、SQLite 落库与结构化查询；
 * Agent 工具循环（mock provider 确定性）+ 四级证据校验 + 九节报告 + 反幻觉 lint；
-* Streamlit 界面：分析 → 调查 → 证据链 → 报告全链路（含停止按钮、引擎崩溃重建、
-  provider 门禁），由 `tests/gui/app_cases.py` 在 CI 里真跑界面断言；
+* Streamlit 原型：分析 → 调查 → 证据链 → 报告全链路（含停止按钮、引擎崩溃重建、
+  provider 门禁）。原型已冻结（只修 bug、不加功能），2026-09-23 起不再进 CI；
 * 桌面应用第一批：**Agent sidecar 协议（通道 B）**已实现并冻结——`packetsage-agent serve`
  提供 `hello/run/chat/report/cancel/status/shutdown` 与 10 类事件，`run_finished` 与
   `run --json` 同构，`seq` 单调、事件 ≤8 KiB、协议清单快照进 CI（`tests/sidecar/`）；
 * 桌面应用第二批：**外壳可构建、可安装**——`desktop/`（React+TS 前端 + Rust 外壳，MSVC
-  工具链）产出 `YeLee’ PacketSage_3.8.1_x64-setup.exe`；外壳的 sidecar 层有 4 条
+  工具链）产出 `YeLee’ PacketSage_4.0.0_x64-setup.exe`；外壳的 sidecar 层有 4 条
   不依赖窗口的验收用例；Agent sidecar 由 PyInstaller `--onedir` 打成 67 MB 独立可执行；
 * fuzz smoke（10 万级随机输入零 panic）、benchmark、doctor、demo 主线。
 

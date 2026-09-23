@@ -59,7 +59,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
 → `npm run tauri build`。产物：
 
 * `desktop/src-tauri/target/release/packetsage-desktop.exe`（外壳）
-* `desktop/src-tauri/target/release/bundle/nsis/YeLee’ PacketSage_3.8.1_x64-setup.exe`（安装包）
+* `desktop/src-tauri/target/release/bundle/nsis/YeLee’ PacketSage_4.0.0_x64-setup.exe`（安装包）
 
 只想跑代码检查（外壳已装 clippy/rustfmt 组件）：
 
@@ -119,7 +119,7 @@ sidecar → PATH → 开发树（`target/release/packetsage.exe`、`python -m pa
 
 ## 体积
 
-安装包 44.1 MB（NSIS/LZMA），文件名 `YeLee’ PacketSage_3.8.1_x64-setup.exe`。里面装的是：
+安装包 44.1 MB（NSIS/LZMA），文件名 `YeLee’ PacketSage_4.0.0_x64-setup.exe`。里面装的是：
 外壳 5 MB + 引擎 125 MB（未 strip）+ Agent
 sidecar 67 MB。引擎那一份远超 §7.2 的 5–15 MB 预算，原因是没有 strip 调试信息——
 给引擎的发布档加 `strip = true`（或 `debug = false`）会显著缩小，属引擎构建策略，待与
