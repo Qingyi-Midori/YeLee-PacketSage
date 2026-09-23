@@ -1124,6 +1124,11 @@ button.icon.on {
 }
 
 .turn-user {
+  /* 用户那一句靠右（2026-09-23 修）：翻过篇的轮次里这一层只是"用户那一行"的包装，
+     原来只有 `.turn.turn-user`（当前这一轮）吃到 align-items，历史轮次就掉到左边去了
+     —— 所以这里自己也得是个 flex 容器。 */
+  display: flex;
+  flex-direction: column;
   align-items: flex-end;
 }
 
@@ -1239,6 +1244,25 @@ details.block[open] .caret {
   padding: 6px 0;
   font-size: var(--fs-small);
   color: var(--muted);
+  /* 跑完收起来的那一行也是标题行：可点、无默认三角、悬停给点反馈。 */
+  cursor: pointer;
+  list-style: none;
+}
+
+.timeline-head::-webkit-details-marker {
+  display: none;
+}
+
+.timeline-head:hover {
+  color: var(--text);
+}
+
+.timeline-head .caret {
+  transition: transform 140ms ease;
+}
+
+.timeline[open] > .timeline-head .caret {
+  transform: rotate(90deg);
 }
 
 .timeline-body {
@@ -1336,7 +1360,8 @@ details.block[open] .caret {
   margin: var(--s1) 0 0;
   color: var(--muted);
   font-size: var(--fs-body);
-  max-width: 76ch;
+  /* 与工具卡片同宽（用户 2026-09-23）：中栏多宽，文字就多宽，不再缩在左边一小条。 */
+  max-width: none;
 }
 
 .hero-stats {
@@ -1492,7 +1517,7 @@ details.block[open] .caret {
 
 /* 模型自己说的那段话：**不加框**——它就是一条助手消息，落在结论上面。 */
 .assistant-note {
-  max-width: 78ch;
+  max-width: none;
 }
 
 .assistant-note .md {
@@ -1501,7 +1526,7 @@ details.block[open] .caret {
 
 /* chat 追问的回答：这一轮的主角，比"总结"再大一号、行距再松一点。 */
 .answer {
-  max-width: 74ch;
+  max-width: none;
 }
 
 .answer .md {
@@ -1775,7 +1800,8 @@ details.tool[open] .caret {
 /* 报告正文：渲染成文档，而不是把 Markdown 原文塞进等宽盒子。 */
 .md {
   margin-top: var(--s2);
-  max-width: 82ch;
+  /* 同上：模型说的那段话要铺满中栏（原来卡在 82ch，看起来比工具卡片窄一截）。 */
+  max-width: none;
   line-height: 1.7;
 }
 
@@ -2241,6 +2267,36 @@ details.tool[open] .caret {
   margin-bottom: var(--s1);
 }
 
+/* 本机参数（设置里的只读表）：版本 / 协议 / 能力 / 路径——给人核对，不给人改。 */
+.wizard-params {
+  margin-top: var(--s2);
+  border-top: 1px solid var(--line-soft);
+  padding-top: var(--s2);
+}
+
+.params {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--fs-small);
+}
+
+.param-row {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: var(--s2);
+  align-items: baseline;
+}
+
+.param-label {
+  color: var(--faint);
+}
+
+.param-value {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .wizard-actions {
   display: flex;
   align-items: center;
@@ -2296,4 +2352,113 @@ details.tool[open] .caret {
   .legend-cards {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* ------------------------------------------------- 推理强度滑块（模型面板） */
+
+/*
+ * 参考 Codex 风格的"模型 + 推理强度"控件（HanaAyane/dsh-reasoning-effort）：
+ * 强度是**一条轴上的档位**，不是开关——开关表达不了"再用力一点"。
+ */
+.effort {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding-top: var(--s1);
+}
+
+.effort-rail {
+  position: relative;
+  height: 44px;
+  margin: 0 12px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.effort-rail::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 9px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.effort-fill {
+  position: absolute;
+  left: 1px;
+  top: 10px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--level, var(--busy));
+  transition: width 160ms ease;
+}
+
+/* 档位配色：关闭=灰、低=蓝、高=绿、最高=橙（照参考图那种"一眼看出力度"）。 */
+.effort-rail[data-level="off"] { --level: var(--idle); }
+.effort-rail[data-level="low"] { --level: var(--busy); }
+.effort-rail[data-level="high"] { --level: var(--ok); }
+.effort-rail[data-level="max"] { --level: var(--warn); }
+
+.effort-stop {
+  position: absolute;
+  top: 0;
+  display: none;
+}
+
+.effort-dot {
+  position: absolute;
+  top: 5px;
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: left 160ms ease;
+  pointer-events: none;
+}
+
+.effort-rail.dragging .effort-fill,
+.effort-rail.dragging .effort-dot {
+  transition: none;
+}
+
+.effort-marks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 26px;
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--fs-tiny);
+  color: var(--faint);
+}
+
+.effort-marks .on { color: var(--text); font-weight: 500; }
+
+.effort-hint {
+  margin: 0;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+/*
+ * 模型正在写的正文：和最终那段总结**同一个位置**，只是淡一点 + 一个脉冲光标。
+ * 旧版它在时间线里往下长、写完却跳到结论区，用户看到的是"字在下面，结论在上面"。
+ */
+.answer-live,
+.assistant-note-live {
+  color: var(--muted);
+}
+
+.answer-live .md::after,
+.assistant-note-live .md::after {
+  content: "▍";
+  margin-left: 2px;
+  color: var(--busy);
+  animation: pulse 1.2s ease-in-out infinite;
 }

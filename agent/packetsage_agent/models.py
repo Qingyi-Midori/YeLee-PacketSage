@@ -177,6 +177,29 @@ class ToolCallRecord:
     llm_ms: int = 0
 
 
+#: `ref_id` 的合法分隔符：模型经常把多个 id 写成 `"10,35,60"`（V3 只认单个）。
+_REF_ID_SEPARATORS: tuple[str, ...] = ("，", ",", "、", ";", "；", "/", "|")
+
+
+def split_ref_ids(value: Any) -> list[str | None]:
+    """把一个 `ref_id` 拆成若干单个 id（`None` = 引用整个工具结果）。
+
+    只做"把一串拆开"这一件事：每个 id 仍要自己过 V3（not reachable 照样拒），
+    所以这不是替模型补引用，而是不让它因为**写法**丢掉一条结论（2026-09-23 实测：
+    `"10,35,60"` 被判不可达，整条 finding 被拒）。
+    """
+    if value is None:
+        return [None]
+    text = str(value).strip()
+    if not text:
+        return [None]
+    parts = [text]
+    for separator in _REF_ID_SEPARATORS:
+        parts = [piece for chunk in parts for piece in chunk.split(separator)]
+    cleaned: list[str | None] = [piece.strip() for piece in parts if piece.strip()]
+    return cleaned or [None]
+
+
 def parse_finding(payload: dict[str, Any], evidence_lookup: dict[str, str]) -> FindingDraft:
     """Builds a draft from model output, resolving evidence `_id`s."""
     if not isinstance(payload, dict):
@@ -188,15 +211,17 @@ def parse_finding(payload: dict[str, Any], evidence_lookup: dict[str, str]) -> F
         if not isinstance(item, dict) or "_id" not in item:
             raise ValidationError("evidence entries need an `_id`")
         tc_id = str(item["_id"])
-        evidence.append(
-            EvidenceRef(
-                _id=tc_id,
-                method=str(item.get("method") or evidence_lookup.get(tc_id, "unknown")),
-                ref_id=item.get("ref_id"),
-                ts_unix_ns=item.get("ts_unix_ns"),
-                summary=item.get("summary"),
+        method = str(item.get("method") or evidence_lookup.get(tc_id, "unknown"))
+        for ref_id in split_ref_ids(item.get("ref_id")):
+            evidence.append(
+                EvidenceRef(
+                    _id=tc_id,
+                    method=method,
+                    ref_id=ref_id,
+                    ts_unix_ns=item.get("ts_unix_ns"),
+                    summary=item.get("summary"),
+                )
             )
-        )
     claims: list[NumericClaim] = []
     for claim in payload.get("claims", []) or []:
         if not isinstance(claim, dict):

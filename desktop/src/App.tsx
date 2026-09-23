@@ -32,6 +32,8 @@ import {
   Banner,
   CaptureOverview,
   ConclusionCard,
+  EffortSlider,
+  effortLabel,
   FeedLine,
   FindingEvidence,
   FindingRow,
@@ -41,13 +43,13 @@ import {
   Mono,
   ReportPanel,
   StatRow,
-  SUGGESTED_QUESTIONS,
-  Suggestions,
+  Timeline,
   fmtCost,
   type FeedItem,
   type Tone,
 } from "./components";
 import { Wizard } from "./Wizard";
+import { isRealTurn, orderTimeline, sanitizeTurns, type Turn } from "./session";
 import type {
   AgentEvent,
   BudgetState,
@@ -76,25 +78,6 @@ const DOCK_VIEWS: [DockView, string][] = [
   ["legend", "图例"],
   ["report", "报告"],
 ];
-
-/**
- * 一轮对话（用户一句 + Agent 这一段）。
- *
- * 引擎库里没有对话文本（`agent_runs` 只存模型/状态/耗时/费用，没有 goal），
- * 所以历史由桌面端自己存：**当前这一轮**在内存里逐事件生长，切到下一轮时
- * 归档进 `history` 并落到 localStorage（按 task 分桶）。
- */
-interface Turn {
-  id: string;
-  goal: string;
-  mode: "run" | "chat";
-  startedAt: number;
-  status: RunStatus;
-  feed: FeedItem[];
-  findings: FindingSummary[];
-  finished: RunFinished | null;
-  rejected: { title: string; reason: string; code: string }[];
-}
 
 /** 归档后的结论卡文案：和"跑完"那条分支同一套口径。 */
 function heroFromTurn(turn: Turn): {
@@ -212,7 +195,8 @@ export default function App() {
   const [modelPanel, setModelPanel] = useState(false);
   const [models, setModels] = useState<string[] | null>(null);
   const [pendingModel, setPendingModel] = useState("");
-  const [pendingThinking, setPendingThinking] = useState("");
+  /** 推理强度（`""` = 自动）。思考模式只有开关，界面只暴露强度（2026-09-23）。 */
+  const [pendingEffort, setPendingEffort] = useState("");
   const [savingModel, setSavingModel] = useState(false);
   const runRef = useRef<string>("");
   const reportRef = useRef<HTMLDivElement | null>(null);
@@ -225,7 +209,7 @@ export default function App() {
    * 「Agent 已退出 / 调查没能完成」，把一次正常的配置说成事故。
    */
   const agentRestartUntilRef = useRef(0);
-  const timelineRef = useRef<HTMLElement | null>(null);
+  const timelineRef = useRef<HTMLDetailsElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
@@ -236,12 +220,12 @@ export default function App() {
    * 把"当前这一轮"冻成一条历史。
    *
    * 切轮（追问 / 再调查）与换任务时调用——不这么做，用户问第二句时上一轮的
-   * 过程与结论就被清空了（这正是"页面要有对话的历史"那条）。
+   * 过程与结论就被清空了（这正是"页面要有对话的历史"那条）。**空壳不归档**：
+   * 没有任何过程与结论的"轮"（老版本打开抓包时留下的那种）不许进历史。
    */
   const archiveLiveTurn = useCallback((): Turn | null => {
     if (!liveTurnId) return null;
-    if (!feed.length && !findings.length && !finished) return null;
-    return {
+    const turn: Turn = {
       id: liveTurnId,
       goal: asked || DEFAULT_GOAL,
       mode: liveMode,
@@ -252,6 +236,7 @@ export default function App() {
       finished,
       rejected,
     };
+    return isRealTurn(turn) ? turn : null;
   }, [asked, feed, findings, finished, liveMode, liveTurnId, rejected, status, turnStartedAt]);
 
   const toggleRail = useCallback((open: boolean) => {
@@ -484,6 +469,35 @@ export default function App() {
           setStatus("running");
           break;
         }
+        case "llm_round_started": {
+          // 模型这一轮刚开始。旧协议只在轮次结束后发事件，模型慢慢想的
+          // 那几分钟里面板一动不动——用户看到的就是"卡住"。
+          const raw = event.data as unknown as LlmRound;
+          const steps = Number(raw.step ?? raw.steps ?? 0);
+          setBudgetState({
+            steps,
+            llm_calls: Number(raw.llm_calls ?? 0),
+            tool_calls: Number(raw.tool_calls ?? 0),
+            tokens_in: Number(raw.tokens_in ?? 0),
+            tokens_out: Number(raw.tokens_out ?? 0),
+            cost_cents: Number(raw.cost_cents ?? 0),
+          });
+          setFeed((current) => [
+            ...current,
+            {
+              kind: "step",
+              step: steps,
+              pending: true,
+              llmMs: 0,
+              toolMs: raw.tool_ms ?? 0,
+              tokens: 0,
+              costCents: Number(raw.cost_cents ?? 0),
+              cacheHit: Number(raw.cache_hit_tokens ?? 0),
+              cacheMiss: Number(raw.cache_miss_tokens ?? 0),
+            },
+          ]);
+          break;
+        }
         case "llm_round": {
           // 协议里这一条叫 `step`（§4.5），本地状态叫 `steps`：两个都认，别让
           // "调查进行中（第 N 步）"在跑的时候一直停在 0。
@@ -506,19 +520,30 @@ export default function App() {
               item.kind === "delta" && !item.done ? { ...item, done: true } : item,
             ),
           );
-          setFeed((current) => [
-            ...current,
-            {
-              kind: "step",
-              step: steps,
-              llmMs: raw.llm_ms ?? 0,
-              toolMs: raw.tool_ms ?? 0,
-              tokens: Number(raw.tokens_in ?? 0) + Number(raw.tokens_out ?? 0),
-              costCents: Number(raw.cost_cents ?? 0),
-              cacheHit,
-              cacheMiss,
-            },
-          ]);
+          const finishedStep = {
+            kind: "step" as const,
+            step: steps,
+            pending: false,
+            llmMs: raw.llm_ms ?? 0,
+            toolMs: raw.tool_ms ?? 0,
+            tokens: Number(raw.tokens_in ?? 0) + Number(raw.tokens_out ?? 0),
+            costCents: Number(raw.cost_cents ?? 0),
+            cacheHit,
+            cacheMiss,
+          };
+          setFeed((current) => {
+            // 开始那一轮先画了一张"正在问模型…"，这一轮结束时把它就地定稿，
+            // 不要多出一条重复的"第 N 步"。
+            const next = [...current];
+            for (let index = next.length - 1; index >= 0; index -= 1) {
+              const item = next[index];
+              if (item.kind === "step" && item.pending) {
+                next[index] = finishedStep;
+                return next;
+              }
+            }
+            return [...next, finishedStep];
+          });
           break;
         }
         case "tool_call_started": {
@@ -610,7 +635,13 @@ export default function App() {
       const targetGoal = text?.trim() || goal.trim() || DEFAULT_GOAL;
       // 先把上一轮归档：对话历史就是这么攒起来的（不许再整屏清空）。
       const archived = archiveLiveTurn();
-      if (archived) setHistory((current) => [...current, archived]);
+      if (archived) {
+        // 归档即落盘：写在**当前这个 task** 的桶里（换 task 之前必须写完，
+        // 否则那半截状态会被下一次渲染当成"这个桶现在是空的"）。
+        const next = [...history, archived];
+        setHistory(next);
+        saveHistory(taskId, next);
+      }
       setLiveTurnId(`turn_${Date.now().toString(36)}`);
       setLiveMode(mode);
       setTurnStartedAt(Date.now());
@@ -636,15 +667,24 @@ export default function App() {
         setStatus("failed");
       }
     },
-    [archiveLiveTurn, goal, onEvent, taskId],
+    [archiveLiveTurn, goal, history, onEvent, taskId],
   );
 
   /** 打开并分析一份抓包（对话框、拖放、左栏按钮都走这一条）。 */
   const analyzePath = useCallback(
     async (path: string) => {
-      // 换抓包 = 换一条对话线：旧任务那一轮先落盘，当前列表清空。
+      /*
+       * 换抓包 = 换一条对话线：旧任务那一轮先落盘，当前列表清空。
+       *
+       * **先落盘，再清屏**（2026-09-23 修）：这里原来清完内存就往下走，而
+       * `await api.analyze()` 之后才换 `taskId`——中间那一次渲染仍然挂着**旧**
+       * task id，于是"history 一变就落盘"的自动写入把旧桶写成了 `[]`，上一份
+       * 抓包真正跑过的轮次就这么没了（症状：点历史对话看不到那一轮）。
+       * 现在落盘只在下面这几处显式做，切换途中的半截状态不会再写进任何桶。
+       */
       const archived = archiveLiveTurn();
       if (archived && taskId) saveHistory(taskId, [...history, archived]);
+      // 立刻清屏：`api.analyze()` 回来之前，会话流里不该还挂着上一份抓包的轮次。
       setHistory([]);
       /**
        * 打开抓包**不是一轮对话**（2026-09-23 修）：`liveTurnId` / `asked` 只在真正
@@ -664,6 +704,12 @@ export default function App() {
       try {
         const result = await api.analyze(path);
         setTaskId(result.task_id);
+        /*
+         * 落盘与内存对齐：这个 task 的桶里有什么就画什么。新抓包的桶本来就是空的；
+         * 同一份抓包再打开一次（引擎按内容复用 `task_id`）时，它自己跑过的轮次会
+         * 原样回来——不再像以前那样被清掉。
+         */
+        setHistory(loadHistory(result.task_id));
         setNotice("");
         setFeed([]);
         setFindings([]);
@@ -762,14 +808,14 @@ export default function App() {
     void revealItemInDir(report.report_path).catch(() => openPath(report.report_path));
   }, [report]);
 
-  /** 输入框右下角的面板：模型（`GET /models` 的候选）+ 思考模式。 */
+  /** 输入框右下角的面板：模型（`GET /models` 的候选）+ 推理强度。 */
   const toggleModelPanel = useCallback(async () => {
     if (modelPanel) {
       setModelPanel(false);
       return;
     }
     setPendingModel(welcome?.providers.model || "");
-    setPendingThinking(providerStatus?.thinking || "");
+    setPendingEffort(providerStatus?.effort || "");
     setModels(null);
     setModelPanel(true);
     try {
@@ -777,11 +823,17 @@ export default function App() {
     } catch {
       setModels([]);
     }
-  }, [modelPanel, providerStatus?.thinking, welcome?.providers.model]);
+  }, [modelPanel, providerStatus?.effort, welcome?.providers.model]);
 
-  /** 保存 = 换模型 / 开关思考：走 U7 的 `provider_save`（key 沿用已存的那一个）。 */
-  const saveModelPanel = useCallback(async () => {
+  /**
+   * 改强度/换模型 = **立刻生效**：写回 `provider.json` 并让 Agent 带着新值重启。
+   *
+   * 不再有"保存"这一步（用户 2026-09-23：临时配置的变化凭什么要点保存）：
+   * 选择即落地，重启在后台发生，跨回合对话已经落盘，所以上下文不丢。
+   */
+  const applyModelPanel = useCallback(async (nextEffort?: string) => {
     if (!welcome) return;
+    const effort = nextEffort ?? pendingEffort;
     setSavingModel(true);
     try {
       const result = await api.providerSave({
@@ -789,24 +841,51 @@ export default function App() {
         model: pendingModel.trim(),
         baseUrl: providerStatus?.base_url ?? "",
         apiKey: null,
-        thinking: pendingThinking,
+        // 思考开关不进界面（强度才是用户要调的档位）；原值原样带回，不改它。
+        thinking: providerStatus?.thinking ?? "",
+        effort,
       });
       setWelcome(result.welcome);
       void api.providerStatus().then(setProviderStatus).catch(() => undefined);
-      setModelPanel(false);
       // 「保存并重启 Agent」：重启是计划内的，别让 `sidecar-exited` 把界面打红。
       pardonAgentRestart();
       setNotice(
         `已切到 ${result.model || result.provider}${
-          pendingThinking === "disabled" ? "（思考已关）" : ""
-        }，Agent 已重启。`,
+          effort ? `（推理强度：${effortLabel(effort)}）` : ""
+        }，下一句生效。`,
       );
     } catch (exc) {
       setError({ code: "MODEL", message: String(exc), retryable: false });
     } finally {
       setSavingModel(false);
     }
-  }, [pardonAgentRestart, pendingModel, pendingThinking, providerStatus?.base_url, welcome]);
+  }, [
+    pardonAgentRestart,
+    pendingEffort,
+    pendingModel,
+    providerStatus?.base_url,
+    providerStatus?.thinking,
+    welcome,
+  ]);
+
+  /** 点面板外面 / 按 Esc = 关闭面板（用户 2026-09-23 要的直觉行为）。 */
+  useEffect(() => {
+    if (!modelPanel) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setModelPanel(false);
+    };
+    const onDown = (event: MouseEvent) => {
+      const node = event.target as HTMLElement | null;
+      if (node?.closest(".model-panel") || node?.closest(".composer-model")) return;
+      setModelPanel(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+    };
+  }, [modelPanel]);
 
   /** 从证据锚点跳到报告（结论 → 证据 → 报告正文，一条线走到底）。 */
   const revealReport = useCallback(() => {
@@ -948,7 +1027,9 @@ export default function App() {
    * 结论卡里的条目：跑的时候结论落在会话流里（流式），卡上只留状态与进度；
    * 跑完再把最终结论摆回卡上——那时它才是主角。
    */
-  const cardRows = running ? [] : hero.rows;
+  // 跑的时候也摆（`hero.rows` 在 running 时就是逐条收到的 findings）：时间线里
+  // 不再重复画一遍结论——同一批结论出现在相隔很远的两处，是这轮实测最刺眼的一条。
+  const cardRows = hero.rows;
   /** 引擎库里的 finding 原文（含模型为每条写的 summary），按 id 取。 */
   const findingDetails = useMemo(() => {
     const map = new Map<string, string>();
@@ -987,6 +1068,40 @@ export default function App() {
     const last = feed[feed.length - 1];
     return Boolean(last && last.kind === "delta" && !last.done);
   })();
+  /**
+   * 模型**正在写的正文**（时间线里那条"输出"泳道）——把它搬到结论的位置去显示：
+   * 旧版它在时间线里往下长、写完却跳到结论区顶部，用户看到的是"字在下面，结论在上面"。
+   * 只取正文，思考与工具参数仍旧留在时间线。
+   */
+  const liveDraft = (() => {
+    const drafts = feed.filter(
+      (item): item is Extract<FeedItem, { kind: "delta" }> =>
+        item.kind === "delta" && item.channel === "content" && item.text.trim().length > 0,
+    );
+    return drafts.length ? drafts[drafts.length - 1].text.trim() : "";
+  })();
+  /**
+   * 时间线只画"过程"：预取 / 思考 / 工具调用；结论与正文归结论区。
+   *
+   * 过滤之后要**重排**（2026-09-23）：同一轮里 `调用` 在最上、`思考` 夹中间、
+   * `输出` 在最下——原来只按事件到达顺序排，"思考"的原文会压在工具调用上面。
+   * 次序规则在 `session.ts` 的 `orderTimeline()` 里（纯函数，可单独验算）。
+   *
+   * `输出`（模型写正文）**正在流的时候不在这里**：那一段只画在结论卡里（一屏只有
+   * 一处文字，用户 2026-09-23 实测要的）。一轮结束、原文收进折叠项之后它才回来，
+   * 排在这一轮的最下面——"调用在上、输出在下"就是这么落地的。
+   */
+  const timelineItems = useCallback(
+    (items: FeedItem[]) =>
+      orderTimeline(
+        items.filter(
+          (item) =>
+            item.kind !== "finding" &&
+            !(item.kind === "delta" && item.channel === "content" && !item.done),
+        ),
+      ),
+    [],
+  );
 
   /** 当前这一轮（还没归档的那一轮）。 */
   const liveTurn: Turn | null = liveTurnId
@@ -1047,11 +1162,6 @@ export default function App() {
     },
     [archiveLiveTurn, history, refreshOverview, taskId],
   );
-
-  /** 历史落盘（按 task 分桶）；写失败也不影响用。 */
-  useEffect(() => {
-    if (taskId) saveHistory(taskId, history);
-  }, [taskId, history]);
 
   /**
    * 跟到底：调查中每来一条（token 碎块、工具卡片、结论）都跟着往下走——
@@ -1414,22 +1524,22 @@ export default function App() {
                       ))}
                     </ConclusionCard>
                   )}
-                  {turn.feed.filter((item) => item.kind !== "delta").length ? (
-                    <section className="timeline">
-                      <div className="timeline-head">
-                        调查过程 · {turn.finished?.steps ?? 0} 步 ·{" "}
-                        {turn.finished?.tool_calls ?? 0} 次工具调用
+                  {timelineItems(turn.feed).length ? (
+                    <Timeline
+                      open={false}
+                      head={
+                        <>
+                          调查过程 · {turn.finished?.steps ?? 0} 步 ·{" "}
+                          {turn.finished?.tool_calls ?? 0} 次工具调用
+                        </>
+                      }
+                    >
+                      <div className="feed">
+                        {timelineItems(turn.feed).map((item, index) => (
+                          <FeedLine key={`${index}-${item.kind}`} item={item} />
+                        ))}
                       </div>
-                      <div className="timeline-body">
-                        <div className="feed">
-                        {turn.feed
-                          .filter((item) => item.kind !== "delta")
-                          .map((item, index) => (
-                            <FeedLine key={`${index}-${item.kind}`} item={item} />
-                          ))}
-                        </div>
-                      </div>
-                    </section>
+                    </Timeline>
                   ) : null}
                 </section>
               );
@@ -1440,7 +1550,13 @@ export default function App() {
               **只有真跑过的轮次才有这一句**——打开 / 切回抓包不再留痕（2026-09-23）。
             */}
             {liveTurn ? (
-              <div className="turn turn-user">
+              <div
+                className="turn turn-user"
+                // 左栏点「历史对话」里当前这一轮（还没归档的那一轮）时，滚到这里。
+                ref={(node) => {
+                  if (node) turnRefs.current.set(liveTurn.id, node);
+                }}
+              >
                 <div className="user-bubble">
                   <div className="who">你</div>
                   <div>{asked}</div>
@@ -1466,6 +1582,10 @@ export default function App() {
                     {finished?.summary ? (
                       <div className="answer">
                         <MarkdownView text={finished.summary} />
+                      </div>
+                    ) : running && liveDraft ? (
+                      <div className="answer answer-live">
+                        <MarkdownView text={liveDraft} />
                       </div>
                     ) : running ? (
                       <p className="answer-pending">
@@ -1505,13 +1625,6 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    {/* 模型自己写的总结：对话里"它说了什么"，没有就不编。 */}
-                    {finished?.summary ? (
-                      <div className="assistant-note">
-                        <MarkdownView text={finished.summary} />
-                      </div>
-                    ) : null}
-
                     {/* ── 第一层：结论 ─────────────────────────────── */}
                     <ConclusionCard
                       tone={hero.tone}
@@ -1532,6 +1645,17 @@ export default function App() {
                         )
                       }
                     >
+                  {/* 模型自己写的那段话**就在结论卡里**（2026-09-23）：它和下面的
+                      结论卡片讲的是同一件事，摆在两头是这轮实测最刺眼的一条。 */}
+                  {finished?.summary ? (
+                    <div className="assistant-note">
+                      <MarkdownView text={finished.summary} />
+                    </div>
+                  ) : running && liveDraft ? (
+                    <div className="assistant-note assistant-note-live">
+                      <MarkdownView text={liveDraft} />
+                    </div>
+                  ) : null}
                   {cardRows.map((row) => (
                     <FindingRow
                       key={row.id}
@@ -1563,13 +1687,7 @@ export default function App() {
                   </>
                 )}
 
-                {/* 建议问题：点一下就是一次 chat 追问，和底部输入框同一条路。 */}
-                {!running && !investigationBlocked ? (
-                  <Suggestions
-                    items={SUGGESTED_QUESTIONS}
-                    onPick={(text) => void startInvestigation("chat", text)}
-                  />
-                ) : null}
+                {/* 建议问题整块删掉（2026-09-23 用户：每次都显示这几句，噪音）。 */}
 
                 {/*
                   ── 调查过程 = 证据时间线（v0.4 前置 + 默认展开）────────────
@@ -1578,16 +1696,24 @@ export default function App() {
                   这是 YeLee’ PacketSage 与普通 chatbot 的差异点，所以它不藏在折叠里。
                 */}
                 {feed.length ? (
-                  <section className="timeline" ref={timelineRef}>
-                    {/* 调查本身**不是卡片**：一个标题行 + 一条时间轴，里面只有
-                        工具调用是可展开的卡片（用户 2026-09-22 的明确要求）。 */}
-                    <div className="timeline-head">
-                      调查过程 · 引擎预取 → 工具调用 → 结论
-                      {overview?.findings?.length ? ` · ${overview.findings.length} 条结论` : ""}
-                    </div>
-                    <div className="timeline-body">
+                  /* 跑的时候展开（看得见模型在干什么），**跑完自己收成一行**
+                     （用户 2026-09-23 要的 Codex 观感）；点标题行还能再展开。 */
+                  <Timeline
+                    open={running}
+                    innerRef={timelineRef}
+                    head={
+                      <>
+                        {running
+                          ? `正在调查 · 第 ${budgetState.steps} 步`
+                          : `调查过程 · ${budgetState.steps} 步 · ${budgetState.tool_calls} 次工具调用`}
+                        {overview?.findings?.length
+                          ? ` · ${overview.findings.length} 条结论`
+                          : ""}
+                      </>
+                    }
+                  >
                       <div className="feed" aria-live={running ? "polite" : "off"}>
-                        {feed.map((item, index) => (
+                {timelineItems(feed).map((item, index) => (
                           <FeedLine
                             key={`${index}-${item.kind}`}
                             item={item}
@@ -1616,8 +1742,7 @@ export default function App() {
                           </div>
                         ) : null}
                       </div>
-                    </div>
-                  </section>
+                  </Timeline>
                 ) : null}
 
               </section>
@@ -1672,12 +1797,6 @@ export default function App() {
                       .map((alert) => <AlertRow key={alert.alert_id} alert={alert} />)}
                   </ConclusionCard>
                 )}
-                {!investigationBlocked ? (
-                  <Suggestions
-                    items={SUGGESTED_QUESTIONS}
-                    onPick={(text) => void startInvestigation("chat", text)}
-                  />
-                ) : null}
               </section>
             ) : null}
           </div>
@@ -1744,7 +1863,9 @@ export default function App() {
                 disabled={broken}
                 title="模型与思考模式"
               >
-                {welcome?.providers.model || welcome?.providers.kind || "未配置"} ▾
+                {welcome?.providers.model || welcome?.providers.kind || "未配置"}
+                {" · "}
+                {effortLabel(providerStatus?.effort || "")} ▾
               </button>
               {running ? (
                 <button
@@ -1765,12 +1886,19 @@ export default function App() {
             {modelPanel ? (
               <div className="model-panel">
                 <div className="model-panel-head">
-                  <span>模型与思考模式</span>
-                  <button className="icon" onClick={() => setModelPanel(false)} title="关闭">
+                  <span>模型 · 推理强度</span>
+                  {/* 面板在 <form> 里：每个按钮都必须显式 type="button"，否则点一下
+                      就是提交表单——"开关思考会顺手开始对话"就是这么来的。 */}
+                  <button
+                    type="button"
+                    className="icon"
+                    onClick={() => setModelPanel(false)}
+                    title="关闭"
+                  >
                     ✕
                   </button>
                 </div>
-                <label className="model-panel-field">
+                <div className="model-panel-field">
                   <span className="label">模型</span>
                   <input
                     value={pendingModel}
@@ -1778,7 +1906,7 @@ export default function App() {
                     placeholder="deepseek-flash"
                     spellCheck={false}
                   />
-                </label>
+                </div>
                 {models === null ? (
                   <p className="muted">正在从端点拉模型列表…</p>
                 ) : models.length ? (
@@ -1786,6 +1914,7 @@ export default function App() {
                     {models.map((id) => (
                       <button
                         key={id}
+                        type="button"
                         className={`suggestion${id === pendingModel ? " seg-on" : ""}`}
                         onClick={() => setPendingModel(id)}
                       >
@@ -1797,35 +1926,18 @@ export default function App() {
                   <p className="muted">端点没返回模型列表（可以直接手填模型名）。</p>
                 )}
                 <div className="model-panel-field">
-                  <span className="label">思考模式</span>
-                  <div className="seg">
-                    {(
-                      [
-                        ["", "自动"],
-                        ["enabled", "开"],
-                        ["disabled", "关"],
-                      ] as const
-                    ).map(([value, label]) => (
-                      <button
-                        key={value || "auto"}
-                        className={pendingThinking === value ? "seg-on" : ""}
-                        onClick={() => setPendingThinking(value)}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  <span className="label">推理强度</span>
+                  <EffortSlider
+                    value={pendingEffort}
+                    onChange={(next) => {
+                      setPendingEffort(next);
+                      void applyModelPanel(next);
+                    }}
+                  />
                 </div>
-                <div className="row">
-                  <button
-                    className="primary"
-                    onClick={() => void saveModelPanel()}
-                    disabled={savingModel || !welcome}
-                  >
-                    {savingModel ? "保存中…" : "保存并重启 Agent"}
-                  </button>
-                  <span className="muted">key 沿用已保存的那一个。</span>
-                </div>
+                <p className="muted">
+                  {savingModel ? "已应用，下一句生效…" : "选择即生效，不用保存；key 沿用已保存的那一个。"}
+                </p>
               </div>
             ) : null}
           </form>
@@ -1931,6 +2043,8 @@ export default function App() {
       {wizardOpen && !broken ? (
         <Wizard
           status={providerStatus}
+          info={info}
+          welcome={welcome}
           onConfigured={onWizardConfigured}
           onClose={() => setWizardOpen(false)}
         />
@@ -1952,8 +2066,9 @@ function loadHistory(taskId: string): Turn[] {
   try {
     const raw = localStorage.getItem(`${HISTORY_KEY}.${taskId}`);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as Turn[];
-    return Array.isArray(parsed) ? parsed : [];
+    // 老版本（2026-09-23 之前）每次打开抓包都留下一条「打开 XXX」的空壳轮次，
+    // 它已经躺在本机的桶里了——读回来的时候统一筛掉，别让它再画进会话流。
+    return sanitizeTurns(JSON.parse(raw));
   } catch {
     return [];
   }

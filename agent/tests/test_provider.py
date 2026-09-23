@@ -45,7 +45,11 @@ def capture_post(monkeypatch, content: str = '{"findings": []}') -> dict:
 
     def fake_post(url, headers=None, json=None, timeout=None):  # noqa: A002 - httpx kwarg
         seen["url"] = url
-        seen["payload"] = json
+        # provider 全程复用同一个 messages 列表：留一份快照，断言才不会被下一轮追加污染。
+        seen["payload"] = {
+            **json,
+            "messages": [dict(message) for message in json.get("messages", [])],
+        }
         return _Response(
             {
                 "choices": [{"message": {"content": content}}],
@@ -226,20 +230,19 @@ def test_streaming_falls_back_to_bulk_when_the_endpoint_rejects_stream(monkeypat
     assert provider.streaming is False
 
 
-def test_streaming_without_usage_marks_the_round_and_stops_streaming(monkeypatch):
+def test_streaming_without_usage_marks_the_round_and_keeps_streaming(monkeypatch):
     lines = sse({"choices": [{"delta": {"content": '{"findings": []}'}}]})  # 没有 usage
     capture_stream(monkeypatch, [_StreamResponse(lines)])
-    posted = capture_post(monkeypatch)
     provider = OpenAIProvider("m", api_key="sk")
 
     first = provider.decide(TASK, [], {}, on_delta=lambda *a: None)
 
     assert first.usage_missing is True
     assert (first.tokens_in, first.tokens_out) == (0, 0)  # 不编数字
-    assert provider.streaming is False
-    # 第二轮回到整块：tokens 重新精确。
+    # 流式保持开着：关掉之后每一轮在界面上都"什么都不发生"，那正是卡住的观感。
+    assert provider.streaming is None
     provider.decide(TASK, [], {}, on_delta=lambda *a: None)
-    assert "stream" not in posted["payload"]
+    assert provider.streaming is None
 
 
 def test_delta_coalescer_flushes_by_size():
@@ -332,21 +335,53 @@ def test_streaming_captures_reasoning_and_cache_hits(monkeypatch):
 
 
 def test_reasoning_is_echoed_back_on_the_next_round(monkeypatch):
-    """官方 thinking_mode：带 tools 时，历史轮次的 reasoning_content 必须回传。"""
-    seen = capture_post(monkeypatch)
-    trace = [
-        {
-            "tool_name": "check_alerts",
-            "args": {},
-            "result_summary": "1 alert",
-            "reasoning": "先确认规则命中。",
-        }
-    ]
-    OpenAIProvider("deepseek-flash", api_key="sk").decide(TASK, trace, {})
+    """官方 thinking_mode：带 tools 时，历史轮次的 reasoning_content 必须回传。
 
-    assistant = seen["payload"]["messages"][2]
+    回传的是**模型自己的那条 assistant 消息**（含 tool_calls），工具结果则是
+    `role="tool"` + `tool_call_id` 的那条——旧实现往里塞的是"伪造的工具记录"，
+    模型既拿不到 id，也看不到自己真的调过什么。
+    """
+    posted = capture_post(monkeypatch, content='{"summary": "只有一条告警", "findings": []}')
+    tool_round = sse(
+        {"choices": [{"delta": {"reasoning_content": "先确认规则命中。"}}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_7",
+                                "function": {"name": "check_alerts", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 4}},
+    )
+    capture_stream(monkeypatch, [_StreamResponse(tool_round)])
+    provider = OpenAIProvider("deepseek-flash", api_key="sk")
+
+    first = provider.decide(TASK, [], {}, on_delta=lambda *a: None)
+    assert first.kind == "tool"
+    assert first.call_ids == ("call_7",)
+    # 工具跑完 → agent 用同一个 id 回填结果（`_run_tool` 干的就是这件事）。
+    provider.record_tool_result(first.call_ids[0], '{"alerts": []}')
+    # 第二轮不带 delta → 走整块 POST，便于直接看载荷。
+    provider.decide(TASK, [], {})
+
+    messages = posted["payload"]["messages"]
+    assistant, tool_message = messages[2], messages[3]
     assert assistant["role"] == "assistant"
     assert assistant["reasoning_content"] == "先确认规则命中。"
+    assert assistant["tool_calls"][0]["id"] == "call_7"
+    assert tool_message == {
+        "role": "tool",
+        "tool_call_id": "call_7",
+        "content": '{"alerts": []}',
+    }
 
 
 def test_thinking_params_follow_the_knob(monkeypatch):
@@ -405,6 +440,126 @@ def test_chat_mode_tells_the_model_to_answer_the_question(monkeypatch):
     assert "这包的内容和什么有关系" in user
 
 
+def test_reasoning_effort_is_sent_only_when_it_is_chosen(monkeypatch):
+    """强度是档位（`reasoning_effort`），不是开关；自动时不显式传。"""
+    monkeypatch.delenv("PACKETSAGE_LLM_EFFORT", raising=False)
+
+    seen = capture_post(monkeypatch)
+    OpenAIProvider("deepseek-flash", api_key="sk", effort="max").decide(TASK, [], {})
+    assert seen["payload"]["reasoning_effort"] == "max"
+
+    seen = capture_post(monkeypatch)
+    OpenAIProvider("deepseek-flash", api_key="sk").decide(TASK, [], {})
+    assert "reasoning_effort" not in seen["payload"]
+
+    monkeypatch.setenv("PACKETSAGE_LLM_EFFORT", "low")
+    seen = capture_post(monkeypatch)
+    OpenAIProvider("deepseek-flash", api_key="sk").decide(TASK, [], {})
+    assert seen["payload"]["reasoning_effort"] == "low"
+
+
+def test_a_follow_up_tells_the_model_not_to_refetch(monkeypatch):
+    """追问那一轮明确告诉模型：上文已经有工具结果，别再查一遍。"""
+    seen = capture_post(monkeypatch)
+    provider = OpenAIProvider(
+        "deepseek-flash",
+        api_key="sk",
+        mode="chat",
+        history=[{"role": "user", "content": "上一轮的问题"}],
+    )
+    provider.decide(TASK, [], {}, goal="那第二条呢")
+
+    messages = seen["payload"]["messages"]
+    assert "already in the messages above" in messages[-1]["content"]
+
+
+def test_prose_answer_is_kept_as_the_summary(monkeypatch):
+    """模型写了一段人话（不是 JSON）：这段就是回答，不再判 malformed 丢掉。
+
+    旧实现要求整轮 `content` 必须是带 `summary` 的 JSON，散文被当成"非法输出"
+    重试一次后整轮作废——用户看到的是"调查完了却一句人话都没有"。
+    """
+    capture_post(monkeypatch, content="这份抓包有 76836 个包，绝大多数是 TCP 重传。")
+    decision = OpenAIProvider("deepseek-flash", api_key="sk").decide(TASK, [], {})
+
+    assert decision.kind == "final"
+    assert decision.malformed is False
+    assert decision.summary == "这份抓包有 76836 个包，绝大多数是 TCP 重传。"
+    assert decision.findings == []
+
+
+def test_json_with_literal_newlines_still_yields_the_summary(monkeypatch):
+    """模型把换行直接敲进 JSON 字符串里：那是格式瑕疵，不该把回答整段丢掉。"""
+    capture_post(monkeypatch, content='{"summary": "第一行\n第二行", "findings": []}')
+    decision = OpenAIProvider("deepseek-flash", api_key="sk").decide(TASK, [], {})
+
+    assert decision.malformed is False
+    assert decision.summary == "第一行\n第二行"
+
+
+def test_json_wrapped_in_a_code_fence_is_unwrapped(monkeypatch):
+    """```json … ``` 这层围栏要拆掉，否则用户看到的就是一大坨 JSON。"""
+    capture_post(monkeypatch, content='```json\n{"summary": "答完了", "findings": []}\n```')
+    decision = OpenAIProvider("deepseek-flash", api_key="sk").decide(TASK, [], {})
+
+    assert decision.summary == "答完了"
+
+
+def test_a_fallback_answer_reaches_the_next_turn(monkeypatch):
+    """兜底补上的回答也要进消息表：用户看到了它，下一轮就必须看得到。"""
+    seen = capture_post(monkeypatch, content='{"summary": "第一次回答", "findings": []}')
+    provider = OpenAIProvider("deepseek-flash", api_key="sk")
+    provider.decide(TASK, [], {})  # 建表
+    provider.record_answer("兜底补上的回答")
+    provider.decide(TASK, [], {}, goal="再问一句")
+
+    messages = seen["payload"]["messages"]
+    assert [message["role"] for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "assistant",
+    ]
+    assert messages[3]["content"] == "兜底补上的回答"
+
+
+def test_history_from_the_previous_turn_is_replayed(monkeypatch):
+    """跨回合记忆：追问要带上上一轮的提问与回答（system 用**当前**这份）。"""
+    seen = capture_post(monkeypatch)
+    history = [
+        {"role": "system", "content": "stale system prompt"},
+        {"role": "user", "content": "第一次提问"},
+        {"role": "assistant", "content": "第一次回答"},
+    ]
+    OpenAIProvider(
+        "deepseek-flash", api_key="sk", mode="chat", history=history
+    ).decide(TASK, [], {}, goal="那第二条呢")
+
+    messages = seen["payload"]["messages"]
+    assert [message["role"] for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert messages[1]["content"] == "第一次提问"
+    assert messages[2]["content"] == "第一次回答"
+    assert "那第二条呢" in messages[3]["content"]
+    assert messages[0]["content"] != "stale system prompt"
+
+
+def test_a_stalled_round_raises_a_visible_timeout(monkeypatch):
+    """整轮超过墙钟上限就抛一条能读懂的错，而不是界面永远不动。"""
+    capture_stream(
+        monkeypatch,
+        [_StreamResponse(sse({"choices": [{"delta": {"content": "……"}}]}))],
+    )
+    provider = OpenAIProvider("m", api_key="sk", round_timeout_s=1e-6)
+
+    with pytest.raises(provider_mod.LlmRoundTimeout):
+        provider.decide(TASK, [], {}, on_delta=lambda *a: None)
+
+
 def test_endpoint_rejecting_the_thinking_field_does_not_kill_the_run(monkeypatch):
     """端点不认 `thinking` 就去掉重发——思考模式是可选增强，不该让整个调查挂掉。"""
     attempts: list[dict] = []
@@ -428,3 +583,42 @@ def test_endpoint_rejecting_the_thinking_field_does_not_kill_the_run(monkeypatch
     assert "thinking" in attempts[0]
     assert "thinking" not in attempts[1]
     assert provider.thinking == "auto"  # 之后几轮不再试
+
+
+def test_non_json_envelope_keeps_only_the_prose(monkeypatch):
+    """实测（2026-09-23）：收尾信封偶尔写成 `[summary]: "…" [findings]: […]`——
+    键名带方括号，不是合法 JSON。回答里只该留那段人话，不能把 JSON 一起端到界面上。"""
+    envelope = (
+        '[summary]: "这份抓包记录了一次 iperf MPTCP 吞吐测试。"\n'
+        '[findings]: [{"title": "全包解码失败", "severity": "low", "basis": "hypothesis"}]'
+    )
+    lines = sse(
+        {"choices": [{"delta": {"content": envelope}}]},
+        {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}},
+    )
+    capture_stream(monkeypatch, [_StreamResponse(lines)])
+
+    # 给了 `on_delta` 才走 SSE（`httpx.stream`）；不给的话是那条单次 POST。
+    decision = OpenAIProvider("deepseek-flash", api_key="sk").decide(
+        TASK, [], {}, on_delta=lambda *args: None
+    )
+
+    assert decision.kind == "final"
+    assert decision.summary == "这份抓包记录了一次 iperf MPTCP 吞吐测试。"
+    assert decision.findings == []
+
+
+def test_prose_that_mentions_the_fields_is_left_alone(monkeypatch):
+    """反例：回答里**提到** `summary` / `findings` 这两个词很正常，不许把回答从中间截断。"""
+    answer = "模型那段话放在 summary 里，findings 是机器字段，两者都由收尾信封给出。"
+    lines = sse(
+        {"choices": [{"delta": {"content": answer}}]},
+        {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}},
+    )
+    capture_stream(monkeypatch, [_StreamResponse(lines)])
+
+    decision = OpenAIProvider("deepseek-flash", api_key="sk").decide(
+        TASK, [], {}, on_delta=lambda *args: None
+    )
+
+    assert decision.summary == answer

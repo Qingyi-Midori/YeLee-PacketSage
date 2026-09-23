@@ -11,6 +11,7 @@
 
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useRef, useState } from "react";
 
 import type {
   Alert,
@@ -22,6 +23,7 @@ import type {
   ToolCall,
   TraceEntry,
 } from "./types";
+import { deltaLane as laneOfDelta } from "./session";
 
 const SEVERITY_LABEL: Record<Severity, string> = {
   high: "严重",
@@ -379,6 +381,8 @@ export type FeedItem =
   | {
       kind: "step";
       step: number;
+      /** 这一轮模型还没回话（`llm_round_started` 之后、`llm_round` 之前）。 */
+      pending?: boolean;
       llmMs: number;
       toolMs: number;
       tokens: number;
@@ -409,6 +413,110 @@ export type FeedItem =
  */
 export type Lane = "思考" | "调用" | "输出" | "结论" | "拒绝";
 
+/**
+ * 推理强度档位（DeepSeek `reasoning_effort`，见 thinking_mode 指南）。
+ *
+ * 界面参考 Codex 风格的"模型 + 推理强度"控件（`HanaAyane/dsh-reasoning-effort`）：
+ * 档位是**一条连续轴**，不是开关；`自动` = 不显式传，跟随厂商默认。
+ */
+export const EFFORT_LEVELS = [
+  { value: "off", label: "关闭", hint: "关掉思考：最快最省，界面上也不会有「思考」" },
+  { value: "low", label: "低", hint: "最快；适合「先看看大概」的粗筛" },
+  { value: "high", label: "高", hint: "默认档；结论更稳，来回稍慢" },
+  { value: "max", label: "最高", hint: "最慢；适合大抓包或需要反复推理的场合" },
+] as const;
+
+/** 档位 → 中文标签（没存过 = 厂商默认，按「高」显示）。 */
+export function effortLabel(value: string): string {
+  return value ? (EFFORT_LEVELS.find((level) => level.value === value)?.label ?? "高") : "高";
+}
+
+/** 没存过强度时的显示档位：DeepSeek 默认思考 + 强度 high，所以落在"高"。 */
+const DEFAULT_EFFORT_INDEX = 2;
+
+/**
+ * 推理强度滑块：点轨道或点档位都行，当前档位下面给一句人话说明。
+ *
+ * 刻意做成"一条轴 + 四档"：开关（开/关）表达不了"想让它更用力一点"这件事，
+ * 而档位是连续可比较的。
+ */
+export function EffortSlider({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const found = EFFORT_LEVELS.findIndex((level) => level.value === value);
+  const index = found >= 0 ? found : DEFAULT_EFFORT_INDEX;
+  const current = EFFORT_LEVELS[index];
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const shown = dragIndex ?? index;
+  const percent = (shown / (EFFORT_LEVELS.length - 1)) * 100;
+
+  const indexFromX = (clientX: number): number => {
+    const rail = railRef.current;
+    if (!rail) return index;
+    const rect = rail.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+    return Math.round(ratio * (EFFORT_LEVELS.length - 1));
+  };
+
+  const move = (clientX: number) => setDragIndex(indexFromX(clientX));
+  const commit = (clientX: number) => {
+    const next = EFFORT_LEVELS[indexFromX(clientX)];
+    setDragIndex(null);
+    if (next && next.value !== current.value) onChange(next.value);
+  };
+
+  return (
+    <div className="effort">
+      <div
+        className={`effort-rail${dragIndex === null ? "" : " dragging"}`}
+        ref={railRef}
+        role="slider"
+        tabIndex={0}
+        aria-valuemin={0}
+        aria-valuemax={EFFORT_LEVELS.length - 1}
+        aria-valuenow={index}
+        aria-valuetext={current.label}
+        data-level={current.value}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          move(event.clientX);
+        }}
+        onPointerMove={(event) => {
+          if (dragIndex !== null) move(event.clientX);
+        }}
+        onPointerUp={(event) => commit(event.clientX)}
+        onPointerCancel={(event) => commit(event.clientX)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+            event.preventDefault();
+            onChange(EFFORT_LEVELS[Math.max(0, index - 1)].value);
+          }
+          if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+            event.preventDefault();
+            onChange(EFFORT_LEVELS[Math.min(EFFORT_LEVELS.length - 1, index + 1)].value);
+          }
+        }}
+      >
+        <div className="effort-fill" data-level={current.value} style={{ width: `${percent}%` }} />
+        <div className="effort-dot" style={{ left: `${percent}%` }} />
+        <div className="effort-marks">
+          {EFFORT_LEVELS.map((level) => (
+            <span key={level.value} className={level.value === current.value ? "on" : ""}>
+              {level.label}
+            </span>
+          ))}
+        </div>
+      </div>
+      <p className="effort-hint">{current.hint}</p>
+    </div>
+  );
+}
+
 function LaneTag({ name }: { name: Lane }) {
   return <span className={`lane lane-${LANE_CLASS[name]}`}>{name}</span>;
 }
@@ -421,19 +529,56 @@ const LANE_CLASS: Record<Lane, string> = {
   拒绝: "rejected",
 };
 
-/** `llm_delta` 的一句话说明（channel → 泳道 + 人话）。 */
+/**
+ * `llm_delta` 的一句话说明（channel → 泳道 + 人话）。
+ *
+ * 泳道本身由 `session.ts` 的 `deltaLane()` 定（时间线的排序用的是同一份映射），
+ * 这里只给它配人话。
+ */
 function deltaLane(channel: string): { lane: Lane; label: string } {
-  if (channel === "tool_args") return { lane: "调用", label: "正在准备调用" };
-  if (channel === "reasoning") return { lane: "思考", label: "模型在推理" };
-  return { lane: "输出", label: "模型在写" };
+  const lane = laneOfDelta(channel);
+  if (lane === "调用") return { lane, label: "正在准备调用" };
+  if (lane === "思考") return { lane, label: "模型在推理" };
+  return { lane, label: "模型在写" };
 }
 
 /** 时间轴上的一条：左边的线由 CSS 画，这里只给内容。 */
+/**
+ * 调查过程 = 一条可折叠的时间线（Codex 的 "Worked for …" 那种）。
+ *
+ * **跑的时候展开**（用户要看得见模型在干什么），**跑完自己收成一行**
+ * （`open` 由 true 变 false 时 React 会把 `open` 属性抹掉），之后点标题行
+ * 还能再展开——收起来只是默认，不是藏起来。
+ */
+export function Timeline({
+  open,
+  head,
+  innerRef,
+  children,
+}: {
+  open: boolean;
+  head: React.ReactNode;
+  innerRef?: React.Ref<HTMLDetailsElement>;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="timeline" open={open} ref={innerRef}>
+      <summary className="timeline-head">
+        <span className="caret">▸</span>
+        {head}
+      </summary>
+      <div className="timeline-body">{children}</div>
+    </details>
+  );
+}
+
 export function FeedLine({ item, evidence }: { item: FeedItem; evidence?: React.ReactNode }) {
   if (item.kind === "step") {
     return (
       <div className="feed-step">
-        <span className="muted">第 {item.step} 步</span>
+        <span className="muted">
+          第 {item.step} 步{item.pending ? " · 正在问模型…" : ""}
+        </span>
       </div>
     );
   }

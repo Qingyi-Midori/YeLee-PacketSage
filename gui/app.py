@@ -72,6 +72,8 @@ def _init_state() -> None:
     st.session_state.setdefault("upload_saved", ("", 0, ""))
     st.session_state.setdefault("uploaded_path", "")
     st.session_state.setdefault("notice", "")
+    #: 每个 task 的跨回合对话（真实消息表）：追问要带着上一轮的结论。
+    st.session_state.setdefault("conversations", {})
 
 
 def _active_job() -> jobs.Job | None:
@@ -273,7 +275,8 @@ def _start_run(
     if session is None or not task_id:
         return
     try:
-        job = jobs.start_run(session, env, task_id, goal, mode=mode)
+        history = (st.session_state.get("conversations") or {}).get(task_id)
+        job = jobs.start_run(session, env, task_id, goal, mode=mode, history=history)
     except Exception as exc:  # noqa: BLE001 - 装配失败（没 key / 坏配置）也要说清楚
         st.session_state.log.append({"role": "error", "message": jobs.error_message(exc)})
         return
@@ -342,6 +345,28 @@ def _pump_run(job: jobs.RunJob) -> None:
     _render_live_run(job, placeholder)
 
 
+def _remember_conversation(job: jobs.RunJob, result: Any) -> None:
+    """把这一轮的真实消息留给下一次追问（同一 task 累计，上限与 sidecar 一致）。
+
+    GUI 每一轮都在本进程里新建 agent，所以"记得住上一轮"只能由界面自己保留：
+    没有它，追问就是一次全新的调查（用户 2026-09-23 实测）。
+    """
+    from packetsage_agent.serve import MAX_HISTORY_MESSAGES, trim_history
+
+    exporter = getattr(getattr(job.agent, "provider", None), "history", None)
+    if not callable(exporter):
+        return
+    try:
+        messages = exporter()
+    except Exception:  # noqa: BLE001 - 记不住不等于这一轮失败
+        return
+    if not messages:
+        return
+    conversations = dict(st.session_state.get("conversations") or {})
+    conversations[job.task_id] = trim_history(messages, MAX_HISTORY_MESSAGES)
+    st.session_state.conversations = conversations
+
+
 def _finding_rows(result: Any) -> list[dict[str, Any]]:
     """把 ``AgentRunResult`` 的结论与引擎分配的 ``F-{n:03}`` 对齐（M8）。"""
     stored = [row for row in (getattr(result, "stored_findings", None) or []) if isinstance(row, dict)]
@@ -375,6 +400,7 @@ def _absorb_run(job: jobs.RunJob) -> None:
         st.session_state.notice = "调查中断：见下面的错误"
     else:
         result = job.result
+        _remember_conversation(job, result)
         rows = _finding_rows(result)
         st.session_state.log.append(
             {

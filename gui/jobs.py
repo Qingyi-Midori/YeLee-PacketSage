@@ -134,8 +134,17 @@ class RunJob(Job):
         return False
 
 
-def build_agent(session: EngineSession, env: AgentEnv, mode: str = "run") -> Any:
-    """按有效配置装配 agent（provider / model / budget / prompt 版本都从配置来）。"""
+def build_agent(
+    session: EngineSession,
+    env: AgentEnv,
+    mode: str = "run",
+    history: list[dict[str, Any]] | None = None,
+) -> Any:
+    """按有效配置装配 agent（provider / model / budget / prompt 版本都从配置来）。
+
+    `history` 是上一轮的真实消息表：追问要接得住"上面已经查过什么"，否则模型只能
+    从零再扫一遍抓包（2026-09-23 实测）。
+    """
     from packetsage_agent.agent import build_agent as agent_factory
 
     settings = env.settings
@@ -149,6 +158,7 @@ def build_agent(session: EngineSession, env: AgentEnv, mode: str = "run") -> Any
         prompt_version=settings.prompt_version,
         base_url=settings.base_url,
         api_key=settings.api_key,
+        history=history,
     )
 
 
@@ -177,9 +187,10 @@ def start_run(
     task_id: str,
     goal: str,
     mode: str = "run",
+    history: list[dict[str, Any]] | None = None,
 ) -> RunJob:
     """后台跑一轮调查；过程事件由脚本线程轮询 ``policy.state.traces`` 取（U1 (1)）。"""
-    agent = build_agent(session, env, mode=mode)
+    agent = build_agent(session, env, mode=mode, history=history)
     job = RunJob(
         kind="run",
         agent=agent,

@@ -15,8 +15,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { api, type DoctorItem, type ProviderStatus, type VerifyResult } from "./api";
-import { Banner, Mono } from "./components";
+import {
+  api,
+  type AppInfo,
+  type DoctorItem,
+  type ProviderStatus,
+  type VerifyResult,
+} from "./api";
+import { Banner, Mono, effortLabel } from "./components";
 import type { Welcome } from "./types";
 
 /** 与 agent 侧 `PROVIDER_DEFAULTS` 对齐；改一处必须改两处。 */
@@ -59,10 +65,16 @@ type Step = 1 | 2 | 3;
 
 export function Wizard({
   status,
+  info,
+  welcome,
   onConfigured,
   onClose,
 }: {
   status: ProviderStatus | null;
+  /** 外壳自报的参数（版本、两个 sidecar 的路径与数据目录）。 */
+  info: AppInfo | null;
+  /** 握手结果：Agent 版本、协议版本、引擎 schema 版本、能力。 */
+  welcome: Welcome | null;
   /** 保存成功：把新的握手结果交回 App。 */
   onConfigured: (welcome: Welcome) => void;
   /** 关掉向导进主界面（"先不接模型"与第 3 步的"进入 PacketSage"）。 */
@@ -75,6 +87,8 @@ export function Wizard({
   const [apiKey, setApiKey] = useState("");
   /** 思考模式："" = 自动（DeepSeek 默认开）/ enabled / disabled。 */
   const [thinking, setThinking] = useState("");
+  /** 推理强度："" = 自动（不显式传）/ low / high / max。 */
+  const [effort, setEffort] = useState("");
   const [verify, setVerify] = useState<VerifyResult | null>(null);
   const [busy, setBusy] = useState<"verify" | "save" | "doctor" | "clear" | null>(null);
   const [error, setError] = useState<string>("");
@@ -89,6 +103,7 @@ export function Wizard({
     setModel(status.model || known?.model || "");
     setBaseUrl(status.base_url || known?.baseUrl || "");
     setThinking(status.thinking || "");
+    setEffort(status.effort || "");
   }, [status]);
 
   const selected = PROVIDERS.find((item) => item.id === kind) ?? PROVIDERS[0];
@@ -115,6 +130,7 @@ export function Wizard({
         baseUrl,
         apiKey: apiKey.trim() ? apiKey.trim() : null,
         thinking,
+        effort,
       });
       setVerify(result);
       // 校验通过（或本来就不需要 key）就直接进第二步；失败留在原地给人看原因。
@@ -124,7 +140,7 @@ export function Wizard({
     } finally {
       setBusy(null);
     }
-  }, [apiKey, baseUrl, kind, model, thinking]);
+  }, [apiKey, baseUrl, effort, kind, model, thinking]);
 
   const runDoctor = useCallback(async () => {
     setBusy("doctor");
@@ -165,6 +181,7 @@ export function Wizard({
         baseUrl,
         apiKey: apiKey.trim() ? apiKey.trim() : null,
         thinking,
+        effort,
       });
       setSaved({ provider: result.provider, model: result.model, key: result.key_stored });
       setApiKey("");
@@ -176,10 +193,52 @@ export function Wizard({
     } finally {
       setBusy(null);
     }
-  }, [apiKey, baseUrl, kind, model, onConfigured, runDoctor, thinking]);
+  }, [apiKey, baseUrl, effort, kind, model, onConfigured, runDoctor, thinking]);
 
   const failed = doctor.filter((item) => item.status === "fail");
   const warned = doctor.filter((item) => item.status === "warn");
+
+  /**
+   * 本机参数（用户 2026-09-23：设置里看不到版本号、协议这些）。
+   *
+   * 只读、不猜：拿不到的写「—」。版本号全来自各自唯一的那份来源——外壳读
+   * `Cargo.toml`、Agent 与协议读握手、引擎 schema 也读握手。
+   */
+  const params: { label: string; value: string }[] = [
+    { label: "应用版本（外壳）", value: info?.version || "—" },
+    { label: "Agent 版本", value: welcome?.agent_version || "—" },
+    { label: "协议版本", value: welcome ? `v${welcome.protocol_version}` : "—" },
+    { label: "引擎 schema 版本", value: welcome ? `v${welcome.schema_version}` : "—" },
+    { label: "Agent 能力", value: welcome?.capabilities?.join(" · ") || "—" },
+    { label: "provider", value: status?.provider || "—" },
+    { label: "模型", value: status?.model || "—" },
+    { label: "端点", value: status?.base_url || "—" },
+    {
+      label: "推理强度",
+      value: status?.effort ? `${effortLabel(status.effort)}（${status.effort}）` : "自动",
+    },
+    {
+      label: "思考模式",
+      value:
+        status?.thinking === "enabled"
+          ? "开"
+          : status?.thinking === "disabled"
+            ? "关"
+            : "自动（跟随模型默认）",
+    },
+    { label: "API key", value: status?.has_key ? "在 Windows 凭据管理器里" : "没存" },
+    { label: "数据目录", value: info?.data_dir || "—" },
+    { label: "引擎库", value: info?.db_url || "—" },
+    {
+      label: "引擎程序",
+      value: info?.engine_program ? `${info.engine_program}（${info.engine}）` : "—",
+    },
+    {
+      label: "Agent 程序",
+      value: info?.agent_program ? `${info.agent_program}（${info.agent}）` : "—",
+    },
+    { label: "进程状态", value: info ? `引擎 ${info.engine_alive ? "在" : "不在"} · Agent ${info.agent_alive ? "在" : "不在"}` : "—" },
+  ];
 
   return (
     <div className="wizard-backdrop">
@@ -266,15 +325,17 @@ export function Wizard({
                   </div>
                 ) : null}
                 <label className="wizard-field">
-                  <span className="label">思考模式</span>
-                  <select
-                    value={thinking}
-                    onChange={(event) => setThinking(event.target.value)}
-                  >
-                    <option value="">自动（DeepSeek 默认开）</option>
-                    <option value="enabled">开：显示「思考」，但更慢更贵</option>
-                    <option value="disabled">关：更快更省，看不到「思考」</option>
+                  <span className="label">推理强度</span>
+                  <select value={effort} onChange={(event) => setEffort(event.target.value)}>
+                    <option value="">自动（跟随模型默认，DeepSeek 为 high）</option>
+                    <option value="low">低：最快，适合先看个大概</option>
+                    <option value="high">高：默认档，结论更稳</option>
+                    <option value="max">最高：最慢，复杂抓包用</option>
                   </select>
+                  <span className="muted">
+                    「思考」始终打开（DeepSeek 默认）：这里调的是它使多大劲。
+                    要彻底关掉用 `PACKETSAGE_LLM_THINKING=disabled`。
+                  </span>
                 </label>
                 <details className="wizard-advanced">
                   <summary>端点（默认就用 {selected.name} 的官方地址）</summary>
@@ -394,6 +455,24 @@ export function Wizard({
             </div>
           </section>
         ) : null}
+
+        {/*
+          本机参数（用户 2026-09-23：设置里看不到版本号、协议这些）。
+          只读、随时可看：版本 / 协议 / 能力 / provider / 两个 sidecar 的路径与数据目录。
+        */}
+        <details className="wizard-advanced wizard-params">
+          <summary>本机参数：版本 · 协议 · 路径</summary>
+          <div className="params">
+            {params.map((item) => (
+              <div className="param-row" key={item.label}>
+                <span className="param-label">{item.label}</span>
+                <span className="param-value">
+                  <Mono>{item.value}</Mono>
+                </span>
+              </div>
+            ))}
+          </div>
+        </details>
       </div>
     </div>
   );

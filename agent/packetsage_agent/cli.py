@@ -931,6 +931,8 @@ def cmd_chat(args: argparse.Namespace, context: Context) -> int:
         print(_banner(client, args.task_id, context.settings))
         prompt = _chat_prompt(args.task_id)
         failures = 0
+        #: 跨回合对话（真实消息表）：追问要接得住上一轮说了什么。
+        conversation: list[dict[str, Any]] = []
         with InterruptGuard() as guard:
             while True:
                 try:
@@ -954,9 +956,10 @@ def cmd_chat(args: argparse.Namespace, context: Context) -> int:
                 try:
                     # The agent exists before the turn runs, so a Ctrl-C during
                     # it can ask *this* run to stop (guard.agent).
-                    agent = _chat_agent(client, context)
+                    agent = _chat_agent(client, context, conversation)
                     guard.agent = agent
                     result = agent.run(args.task_id, text)
+                    conversation = _remember_chat(agent, conversation)
                     last_result = result
                     failures = 0
                     for finding in result.findings:
@@ -988,8 +991,16 @@ def cmd_chat(args: argparse.Namespace, context: Context) -> int:
     return EXIT_SUCCESS
 
 
-def _chat_agent(client: Any, context: Context) -> Any:
-    """One REPL turn gets its own agent: fresh budget, own agent_run_id (§5)."""
+def _chat_agent(
+    client: Any,
+    context: Context,
+    conversation: list[dict[str, Any]] | None = None,
+) -> Any:
+    """One REPL turn gets its own agent: fresh budget, own agent_run_id (§5).
+
+    `conversation` 是同一 REPL 会话里累积的真实消息（上一轮 assistant 的原文与
+    工具结果），新的一轮把它接在 system 之后——不然追问等于从头再查一遍。
+    """
     from .agent import build_agent
 
     return build_agent(
@@ -1002,7 +1013,28 @@ def _chat_agent(client: Any, context: Context) -> Any:
         prompt_version=context.settings.prompt_version,
         base_url=context.settings.base_url,
         api_key=context.settings.api_key,
+        history=conversation,
     )
+
+
+def _remember_chat(agent: Any, conversation: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把这一轮的真实消息接在会话历史上（下一问才认得上文）。"""
+    from .serve import trim_history
+
+    exporter = getattr(getattr(agent, "provider", None), "history", None)
+    if not callable(exporter):
+        return conversation
+    try:
+        messages = exporter()
+    except Exception:  # noqa: BLE001 - 记不住不等于这一轮失败
+        return conversation
+    if not messages:
+        return conversation
+    return trim_history(messages, _CHAT_HISTORY_LIMIT)
+
+
+#: 一次 REPL 会话保留的消息上限（和 sidecar 的同一套规矩）。
+_CHAT_HISTORY_LIMIT = 24
 
 
 def _progress_for(context: Context) -> Any:

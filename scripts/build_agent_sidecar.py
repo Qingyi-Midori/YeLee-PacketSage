@@ -60,6 +60,12 @@ def pyinstaller_argv(work: Path) -> list[str]:
         f"{PACKAGE / 'prompts_text'}{os.pathsep}packetsage_agent/prompts_text",
         "--add-data",
         f"{PACKAGE / 'banner.txt'}{os.pathsep}packetsage_agent",
+        # 版本号的**唯一来源**一起进包（2026-09-23）：`_version.py` 先问
+        # importlib.metadata，打包态里那份 dist-info 是**开发机 site-packages 的
+        # editable 安装**（可能是几个月前的旧版本号），于是 4.1.x 的 sidecar 一直
+        # 报 4.0.0。现在 pyproject.toml 跟包走：取不到 metadata 就照源树读它。
+        "--add-data",
+        f"{AGENT / 'pyproject.toml'}{os.pathsep}.",
         # Optional groups are not part of the sidecar (it never drives LangChain).
         "--exclude-module",
         "langchain",
@@ -80,10 +86,6 @@ def pyinstaller_argv(work: Path) -> list[str]:
         str(AGENT),
         "--collect-submodules",
         "packetsage_agent",
-        # `_version.py` answers through importlib.metadata; without the copied
-        # dist-info a frozen sidecar would report `0.0.0+unknown`.
-        "--copy-metadata",
-        "packetsage-agent",
         str(ROOT / "scripts" / "agent_sidecar_entry.py"),
     ]
 

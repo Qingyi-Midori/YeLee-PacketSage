@@ -77,6 +77,39 @@ def test_parse_finding_rejects_a_bad_severity() -> None:
         )
 
 
+def test_parse_finding_splits_a_multi_value_ref_id() -> None:
+    """`ref_id` 写成一串（"10,35,60"）只是写法问题：拆成三条引用，各过各的 V3。"""
+    parsed = parse_finding(
+        {
+            "title": "x",
+            "severity": "medium",
+            "basis": "direct_observation",
+            "summary": "y",
+            "evidence": [{"_id": "tc-1", "ref_id": "10,35,60"}],
+        },
+        {"tc-1": "inspect_packets"},
+    )
+    assert [item.ref_id for item in parsed.evidence] == ["10", "35", "60"]
+    assert {item._id for item in parsed.evidence} == {"tc-1"}
+    assert {item.method for item in parsed.evidence} == {"inspect_packets"}
+
+
+def test_parse_finding_keeps_a_single_ref_id_intact() -> None:
+    """单个 id（含连字符、点、冒号）不能被拆坏。"""
+    for value in ("S-000124", "NET-TCP-SYN-BURST-001", "10", "10.0.0.1:40000"):
+        parsed = parse_finding(
+            {
+                "title": "x",
+                "severity": "low",
+                "basis": "direct_observation",
+                "summary": "y",
+                "evidence": [{"_id": "tc-1", "ref_id": value}],
+            },
+            {},
+        )
+        assert [item.ref_id for item in parsed.evidence] == [value]
+
+
 def test_step_budget_stops_the_loop() -> None:
     policy = AgentPolicy(AgentBudget(max_steps=2))
     assert policy.can_continue()

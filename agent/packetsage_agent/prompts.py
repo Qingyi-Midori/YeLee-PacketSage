@@ -127,7 +127,13 @@ FINALIZE_INSTRUCTION = """Summarise with strict JSON:
 `summary` is the answer a human reads first: 2–4 句中文，说清这份抓包到底怎么回事、
 依据是哪个工具结果，以及还有什么没查清。不要罗列 finding 标题，也不要把证书/包号堆进去。
 Only cite _id values that appear in your tool results. If there is no evidence for a
-claim, drop the finding instead of guessing."""
+claim, drop the finding instead of guessing.
+
+How to cite (the engine validates this; a violation drops the whole finding):
+- `_id` = the `_anchor` field of the tool result you used.
+- `ref_id` = exactly **one** value copied from that result's `_ref_ids` array
+  (e.g. "S-000124", "NET-TCP-SYN-BURST-001", "10"). Never join several ids into one
+  string, never invent one, and omit `ref_id` when you only mean the whole result."""
 
 #: `chat` 模式的收尾指令：**回答用户那句话**，而不是汇报"有没有可疑行为"。
 #: （用户 2026-09-22 实测：只给 run 版指令时，追问会得到一份 findings 汇报，问题本身没人答。）
@@ -136,7 +142,9 @@ CHAT_FINALIZE_INSTRUCTION = """Answer with strict JSON:
 `summary` **就是你的回答**：用用户的语言，2–6 句，直接回答他问的那件事——用到哪些工具结果、
 数字是多少、tc 锚点是什么；答不了的部分要明说"抓包里没有能回答这个的字段"，不要绕开问题。
 `findings` 只在用户明确要求落成结论时才给，否则给空数组。
-Only cite _id values that appear in your tool results."""
+Only cite _id values that appear in your tool results: `_id` = the `_anchor` of the
+result, `ref_id` = exactly **one** value from its `_ref_ids` array (never a
+comma-joined list; omit it when you only mean the whole result)."""
 
 
 def finalize_instruction(mode: str) -> str:
@@ -155,3 +163,15 @@ CHAT_ANSWER_ONLY = """Now answer the user's question with strict JSON, **no tool
 def tool_listing() -> str:
     """Compact tool listing injected into the user message."""
     return "\n".join(f"- {line}" for line in TOOL_HINTS)
+
+
+#: run 模式的"只回答"兜底：和 chat 版只差"回答什么"这句话本身。
+RUN_ANSWER_ONLY = """Now answer with strict JSON, **no tool calls**:
+{"summary": str}
+`summary` 用 2–6 句写给用户看的总结：这份抓包到底怎么回事、依据是哪个工具结果、
+还有什么没查清。不要罗列 finding 标题，也不要堆证据编号。"""
+
+
+def answer_only_instruction(mode: str = "chat") -> str:
+    """不带工具的最后一问：`chat` = 回答用户，`run` = 总结这次调查。"""
+    return RUN_ANSWER_ONLY if mode == "run" else CHAT_ANSWER_ONLY

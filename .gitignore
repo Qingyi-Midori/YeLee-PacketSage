@@ -30,3 +30,10 @@ packetsage-gui.engine.log
 # Secrets (never commit)
 临时deepseekapikey.txt
 .env
+
+# 测试记录与验收材料（2026-09-23 用户要求）：留在本机，不进版本库。
+# * docs/ui/        真机验收与问题截图（状态四张、09-22 问题、09-23 修复各十张）
+# * docs/agent-eval/ E1–E6 评测记录
+# 规格与项目报告里提到它们的地方都写了"本地留存"。
+/docs/ui/
+/docs/agent-eval/

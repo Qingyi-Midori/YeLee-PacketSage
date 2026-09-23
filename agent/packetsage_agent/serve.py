@@ -33,6 +33,7 @@ Agent→ {"type":"event","event":"tool_call_finished","run_id":"…","seq":7,
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -196,25 +197,18 @@ class EventSink:
         self._sidecar = sidecar
         self._run = run
 
+    def llm_round_started(self, state: Any, budget: Any) -> None:
+        """一轮**开始**就先发一条：界面从此有"正在问模型"的底。
+
+        旧协议只在轮次结束后发 ``llm_round``，于是模型慢慢想的时候界面上什么
+        都不动——用户看到的"卡住"就是这里（2026-09-23 实测）。
+        """
+        self._sidecar.emit("llm_round_started", _round_payload(state), self._run)
+
     def llm_round(self, state: Any, budget: Any) -> None:
         self._sidecar.emit(
             "llm_round",
-            {
-                "step": int(getattr(state, "steps", 0)),
-                "llm_calls": int(getattr(state, "llm_calls", 0)),
-                "tool_calls": int(getattr(state, "tool_calls", 0)),
-                "tokens_in": int(getattr(state, "tokens_in", 0)),
-                "tokens_out": int(getattr(state, "tokens_out", 0)),
-                "cost_cents": int(getattr(state, "cost_cents", 0)),
-                # 性能改造 #1：模型慢还是工具慢，界面和报告分得开。
-                "llm_ms": int(getattr(state, "llm_ms", 0)),
-                "tool_ms": int(getattr(state, "tool_ms", 0)),
-                "preloaded": int(getattr(state, "preloaded", 0)),
-                # 输入侧缓存命中情况（DeepSeek 上下文硬盘缓存）：没有数据就是 0，
-                # 界面用"有没有这两个数"区分"这个 provider 不报"与"全没命中"。
-                "cache_hit_tokens": int(getattr(state, "cache_hit_tokens", 0)),
-                "cache_miss_tokens": int(getattr(state, "cache_miss_tokens", 0)),
-            },
+            _round_payload(state),
             self._run,
         )
 
@@ -311,6 +305,8 @@ class Sidecar:
         self._welcome: dict[str, Any] | None = None
         self._fatal: ProtocolError | None = None
         self._active: ActiveRun | None = None
+        #: 每个 task 上一回合的真实消息表：追问要接得住"上面已经查过什么"。
+        self._history: dict[str, list[dict[str, Any]]] = {}
         self._session_seq = 0
         self._last_run_id = ""
         self._schema_version = DEFAULT_SCHEMA_VERSION
@@ -564,6 +560,7 @@ class Sidecar:
             prompt_version=params.get("prompt_version") or self._settings.prompt_version,
             base_url=self._settings.base_url,
             api_key=self._settings.api_key,
+            history=self._conversation(task_id),
         )
         run = ActiveRun(
             run_id=agent.agent_run_id, task_id=task_id, mode=mode, goal=goal, agent=agent
@@ -592,6 +589,45 @@ class Sidecar:
         run.thread.start()
         return True
 
+    # ------------------------------------------------------- 跨回合记忆（追问）
+    def _conversation(self, task_id: str) -> list[dict[str, Any]]:
+        """这个 task 上一回合的真实消息表（内存优先，其次磁盘；没有就是空）。
+
+        磁盘那一份是给"Agent 重启"用的：换模型 / 改推理强度都会重启 sidecar
+        （§7.4 第 3 步），内存里的对话会没——用户看到的就是"一改设置，对话从头
+        开始"（2026-09-23 实测）。
+        """
+        with self._lock:
+            cached = self._history.get(task_id)
+        if cached:
+            return [dict(item) for item in cached]
+        stored = _load_conversation(task_id)
+        if stored:
+            with self._lock:
+                self._history[task_id] = stored
+            return [dict(item) for item in stored]
+        return []
+
+    def _remember_conversation(self, task_id: str, agent: Any) -> None:
+        """run 成功收尾后，把这一轮的 messages 留给下一次追问。
+
+        旧实现每个回合都从零开始（用户 2026-09-23 实测："上面已经调查完了"这句
+        话对模型不存在），所以追问只会重新扫一遍抓包。
+        """
+        exporter = getattr(getattr(agent, "provider", None), "history", None)
+        if not callable(exporter):
+            return
+        try:
+            messages = exporter()
+        except Exception:  # noqa: BLE001 - 记不住不等于这一轮失败
+            return
+        if not messages:
+            return
+        trimmed = trim_history(messages, MAX_HISTORY_MESSAGES)
+        with self._lock:
+            self._history[task_id] = trimmed
+        _save_conversation(task_id, trimmed)
+
     def _runner(self, run: ActiveRun) -> None:
         try:
             result = run.agent.run(run.task_id, run.goal)
@@ -601,6 +637,7 @@ class Sidecar:
             self.emit("error", error.as_dict(), run)
             payload = _failure_payload(run, error)
         else:
+            self._remember_conversation(run.task_id, run.agent)
             payload = run_json_payload(result, run.agent)
         run.result = payload
         self.emit("run_finished", payload, run)
@@ -780,6 +817,96 @@ def _budget_dict(budget: Any) -> dict[str, Any]:
         "max_tokens": int(budget.max_tokens),
         "max_cost_cents": int(budget.max_cost_cents),
     }
+
+
+def _round_payload(state: Any) -> dict[str, Any]:
+    """``llm_round_started`` / ``llm_round`` 共用的一份计数（性能改造 #1）。"""
+    return {
+        "step": int(getattr(state, "steps", 0)),
+        "llm_calls": int(getattr(state, "llm_calls", 0)),
+        "tool_calls": int(getattr(state, "tool_calls", 0)),
+        "tokens_in": int(getattr(state, "tokens_in", 0)),
+        "tokens_out": int(getattr(state, "tokens_out", 0)),
+        "cost_cents": int(getattr(state, "cost_cents", 0)),
+        # 性能改造 #1：模型慢还是工具慢，界面和报告分得开。
+        "llm_ms": int(getattr(state, "llm_ms", 0)),
+        "tool_ms": int(getattr(state, "tool_ms", 0)),
+        "preloaded": int(getattr(state, "preloaded", 0)),
+        # 输入侧缓存命中情况（DeepSeek 上下文硬盘缓存）：没有数据就是 0，
+        # 界面用"有没有这两个数"区分"这个 provider 不报"与"全没命中"。
+        "cache_hit_tokens": int(getattr(state, "cache_hit_tokens", 0)),
+        "cache_miss_tokens": int(getattr(state, "cache_miss_tokens", 0)),
+    }
+
+
+#: 跨回合记忆的上限（消息条数）：追问只需要"上一轮说了什么 + 依据"，不是全史。
+MAX_HISTORY_MESSAGES = 24
+
+
+def _conversation_dir() -> Path | None:
+    """跨回合对话落盘的位置：`$PACKETSAGE_STATE_DIR`，否则跟着 `PACKETSAGE_DB`。
+
+    侧车不自己决定数据目录（那是外壳的事）：给了 state dir 就用它，没给就跟着
+    数据库文件放在同一个目录下的 `conversations/`。都没有就只留内存——CLI 与
+    测试不必写盘。
+    """
+    override = os.environ.get("PACKETSAGE_STATE_DIR")
+    if override:
+        return Path(override) / "conversations"
+    url = os.environ.get("PACKETSAGE_STORAGE_URL") or os.environ.get("PACKETSAGE_DB") or ""
+    if url.startswith("sqlite://"):
+        db = url[len("sqlite://") :].split("?", 1)[0]
+        if db:
+            return Path(db).parent / "conversations"
+    return None
+
+
+def _conversation_path(task_id: str) -> Path | None:
+    directory = _conversation_dir()
+    if directory is None or not task_id or "/" in task_id or "\\" in task_id:
+        return None
+    return directory / f"{task_id}.json"
+
+
+def _load_conversation(task_id: str) -> list[dict[str, Any]]:
+    """读回上一次落盘的对话（读不到就算没有，不抛）。"""
+    path = _conversation_path(task_id)
+    if path is None or not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _save_conversation(task_id: str, messages: list[dict[str, Any]]) -> None:
+    """把这一轮的对话写回磁盘（写不了就算了，不打断 run）。"""
+    path = _conversation_path(task_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(messages, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError:  # pragma: no cover - 只读目录不该让 run 失败
+        return
+
+
+def trim_history(
+    messages: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    """留 system + 尾巴，并且不留"没有配对 assistant 的 tool 消息"（API 会 400）。"""
+    if len(messages) <= limit:
+        return list(messages)
+    head = messages[0]
+    tail = messages[-(limit - 1) :]
+    while tail and tail[0].get("role") == "tool":
+        tail = tail[1:]
+    return [head, *tail]
 
 
 def _failure_payload(run: ActiveRun, error: ProtocolError) -> dict[str, Any]:

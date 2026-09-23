@@ -216,6 +216,7 @@ fn packaged_agent_verifies_provider_configurations() {
         model: "local-model".to_owned(),
         base_url: "http://127.0.0.1:1/v1".to_owned(),
         thinking: String::new(),
+        effort: String::new(),
     };
     let (ok, detail) = probe_provider(&spec, &unreachable, None, &env_file).expect("probe local");
     assert!(!ok, "127.0.0.1:1 不该连得上");
@@ -238,6 +239,7 @@ fn packaged_agent_verifies_provider_configurations() {
         model: "deepseek-chat".to_owned(),
         base_url: "http://127.0.0.1:1/v1".to_owned(),
         thinking: String::new(),
+        effort: String::new(),
     };
     let (ok, detail) = probe_provider(&spec, &keyed, Some("sk-not-a-real-key".to_owned()), &env_file)
         .expect("probe keyed deepseek");

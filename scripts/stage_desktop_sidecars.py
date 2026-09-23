@@ -73,6 +73,16 @@ def stage(rebuild_agent: bool) -> None:
     if target_tree.exists():
         shutil.rmtree(target_tree)
     shutil.copytree(source_tree, target_tree)
+
+    # Tauri 之后把 resources **增量**复制进它自己的 target/release/：源里已经没有的
+    # 旧文件不会被删掉。留着上一个版本在那儿的东西，新包就会自报旧版本——2026-09-23
+    # 实测：4.1.3 的包里 agent 还是 4.0.0，正是因为旧的 `packetsage_agent-4.0.0.dist-info`
+    # 还躺在 target/release/agent-sidecar/_internal/ 里。这里先清掉，让复制从零开始。
+    release_tree = ROOT / "desktop" / "src-tauri" / "target" / "release" / "agent-sidecar"
+    if release_tree.exists():
+        shutil.rmtree(release_tree)
+        print(f"cleared {release_tree.relative_to(ROOT)} (stale resources from the last bundle)")
+
     size = sum(item.stat().st_size for item in target_tree.rglob("*") if item.is_file())
     print(
         f"agent:  {source_tree} -> {target_tree.relative_to(ROOT)} "

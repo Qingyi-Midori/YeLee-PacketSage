@@ -23,6 +23,10 @@ pub struct ProviderConfig {
     /// 空串必须在旧 `provider.json` 上也能反序列化，所以给了 `serde(default)`。
     #[serde(default)]
     pub thinking: String,
+    /// 推理强度（DeepSeek `reasoning_effort`）：`""` = 自动（不显式传，跟随厂商默认）。
+    /// 思考模式只有开关，强度才有档位——界面只暴露这一项（2026-09-23）。
+    #[serde(default)]
+    pub effort: String,
 }
 
 impl ProviderConfig {
@@ -41,6 +45,7 @@ impl ProviderConfig {
             model: model.to_owned(),
             base_url: base_url.to_owned(),
             thinking: String::new(),
+            effort: String::new(),
         }
     }
 
@@ -59,6 +64,7 @@ impl ProviderConfig {
                 base_url
             },
             thinking: normalise_thinking(&self.thinking),
+            effort: normalise_effort(&self.effort),
         }
     }
 
@@ -67,6 +73,17 @@ impl ProviderConfig {
         match self.thinking.as_str() {
             "enabled" => Some("enabled"),
             "disabled" => Some("disabled"),
+            _ => None,
+        }
+    }
+
+    /// 推理强度是否要显式注入（`auto` 与空串都不注入）。
+    pub fn effort_env(&self) -> Option<&'static str> {
+        match self.effort.as_str() {
+            "off" => Some("off"),
+            "low" => Some("low"),
+            "high" => Some("high"),
+            "max" => Some("max"),
             _ => None,
         }
     }
@@ -90,6 +107,22 @@ fn normalise_thinking(value: &str) -> String {
     match value.trim().to_lowercase().as_str() {
         "enabled" | "on" | "1" | "true" => "enabled".to_owned(),
         "disabled" | "off" | "0" | "false" => "disabled".to_owned(),
+        _ => String::new(),
+    }
+}
+
+/// 只认 `auto` / `low` / `high` / `max`（其余一律当自动）。
+///
+/// 厂商的别名按 DeepSeek 文档的映射表收敛：`minimal` → low、`medium` → high、
+/// `xhigh` / `ultra` → max；模型不认的档位由 provider 侧再兜一次。
+fn normalise_effort(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "off" | "disabled" | "none" => "off".to_owned(),
+        "low" | "minimal" => "low".to_owned(),
+        "high" | "medium" => "high".to_owned(),
+        "max" | "xhigh" | "ultra" => "max".to_owned(),
+        // 空串 = 没选过（旧 provider.json / 向导没提这一项）：界面按"高"显示，
+        // 侧车那边就是厂商默认，两者一致。
         _ => String::new(),
     }
 }
@@ -146,9 +179,12 @@ pub fn agent_env(
     if let Some(key) = api_key.filter(|key| !key.trim().is_empty()) {
         pairs.push(("PACKETSAGE_LLM_API_KEY".to_owned(), key));
     }
-    if let Some(thinking) = config.thinking_env() {
-        pairs.push(("PACKETSAGE_LLM_THINKING".to_owned(), thinking.to_owned()));
-    }
+        if let Some(thinking) = config.thinking_env() {
+            pairs.push(("PACKETSAGE_LLM_THINKING".to_owned(), thinking.to_owned()));
+        }
+        if let Some(effort) = config.effort_env() {
+            pairs.push(("PACKETSAGE_LLM_EFFORT".to_owned(), effort.to_owned()));
+        }
     // `local` 端点常常在局域网/本机，明确不要代理，免得 curl 式的代理环境把
     // 请求带走（有 key 的两种 provider 不受影响）。
     if config.provider == "local" {
@@ -196,6 +232,7 @@ mod tests {
             model: "  ".to_owned(),
             base_url: String::new(),
             thinking: " OFF ".to_owned(),
+            effort: " HIGH ".to_owned(),
         }
         .normalised();
         assert_eq!(config.provider, "deepseek");
@@ -205,6 +242,9 @@ mod tests {
         // 思考模式只认三种值，"OFF" 归一成 disabled（侧车据此发 thinking 字段）。
         assert_eq!(config.thinking, "disabled");
         assert_eq!(config.thinking_env(), Some("disabled"));
+        // 强度同样只认四档：别名按文档收敛，界面只给 auto/low/high/max。
+        assert_eq!(config.effort, "high");
+        assert_eq!(config.effort_env(), Some("high"));
         assert!(!ProviderConfig::defaults("mock").needs_key());
     }
 

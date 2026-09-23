@@ -92,8 +92,11 @@ migrations/                SQLite/PostgreSQL 双方言 migration
 scripts/                   gen_traffic.py（合成流量）、bench.py（benchmark）、build*.ps1（构建）
 tests/                     cli 契约 / sidecar 协议 / GUI 原型用例 / 十步演示主线
 fuzz/fuzz_targets/         cargo-fuzz 目标（nightly）
-docs/                      architecture / error-codes / report-spec / benchmarks / agent-eval / ADR
+docs/                      architecture / error-codes / report-spec / benchmarks / ADR
 docs/specs/                开发文档与各工程规格书；docs/archive/ 放已归档的 CLI 规格
+
+测试记录与验收材料（`docs/ui/` 截图、`docs/agent-eval/` 评测结果）**留在本机、不进版本库**，
+见 `.gitignore`；规格与项目报告里提到它们的地方都标了"本地留存"。
 ```
 
 ## 3. 桌面应用（产品）
@@ -159,7 +162,7 @@ docs/specs/                开发文档与各工程规格书；docs/archive/ 放
 | [GUI 工程规格书 v0.2.md](docs/specs/GUI%20工程规格书%20v0.2.md) | 桌面应用：Tauri 架构、进程与数据交换协议、集成项 U1–U10、打包分发、人工验收 M1–M24 |
 | [项目报告 v1.md](docs/specs/项目报告%20v1.md) | **最新状态**（2026-09-23）：完成度自评、本轮实测、缺陷 F1–F5、决策 D1–D9、收尾路线 |
 | [项目报告 v0.1.md](docs/specs/项目报告%20v0.1.md) | 前身（2026-09-21）：交付物、连接层 11 条问题、HTTP/MCP/in-process 评估 |
-| [docs/agent-eval/](docs/agent-eval/) | E1–E6 评测结果 |
+| `docs/agent-eval/` | E1–E6 评测结果（**本地留存，未入库**） |
 | [M0～M2 Rust 工程规格书.md](docs/specs/M0～M2%20Rust%20工程规格书.md) | 上游规格 |
 | [M3～M6 工程规格书 v0.2.md](docs/specs/M3～M6%20工程规格书%20v0.2.md) | 上游规格 |
 | [开发文档 v0.3.md](docs/specs/开发文档%20v0.3.md) | 总开发文档 |

@@ -125,6 +125,8 @@ impl AppState {
 
 #[derive(Serialize)]
 pub struct AppInfo {
+    /// 外壳自己的版本（`Cargo.toml` 的那一个）——设置里"本机参数"要显示它。
+    pub version: String,
     pub engine: String,
     pub agent: String,
     pub engine_program: String,
@@ -151,6 +153,7 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         _ => (String::new(), String::new()),
     };
     AppInfo {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
         engine,
         agent,
         engine_program,
@@ -196,6 +199,53 @@ pub async fn doctor(state: State<'_, AppState>) -> Result<Value, String> {
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::key_action;
+
+    /// 填了新 key：永远以新的为准（向导第 1 步 / 换 key）。
+    #[test]
+    fn a_new_key_always_wins() {
+        assert_eq!(
+            key_action("deepseek", true, Some(" sk-new ".into()), None),
+            Ok(Some("sk-new".into()))
+        );
+        assert_eq!(
+            key_action("deepseek", true, Some("sk-new".into()), Some("sk-old".into())),
+            Ok(Some("sk-new".into()))
+        );
+    }
+
+    /// **模型面板那条路**（`apiKey: null`）：凭据管理器里有旧的，就沿用、不许报错。
+    /// 这条挂了就是"滑块能滑但强度存不下来"。
+    #[test]
+    fn a_missing_key_reuses_the_stored_one() {
+        assert_eq!(
+            key_action("deepseek", true, None, Some("sk-old".into())),
+            Ok(None)
+        );
+        assert_eq!(
+            key_action("deepseek", true, Some("   ".into()), Some("sk-old".into())),
+            Ok(None)
+        );
+    }
+
+    /// 一个都没给：这时才该拒绝（向导的提示就是"把 key 填进来"）。
+    #[test]
+    fn a_missing_key_without_a_stored_one_is_rejected() {
+        let error = key_action("deepseek", true, None, None).unwrap_err();
+        assert!(error.contains("deepseek"), "错误里要说清是哪个 provider：{error}");
+        assert!(key_action("deepseek", true, Some(" ".into()), None).is_err());
+    }
+
+    /// mock / local 不需要 key；返回值 `None` 让调用方把可能留着的旧 key 删掉。
+    #[test]
+    fn a_keyless_provider_needs_no_key() {
+        assert_eq!(key_action("mock", false, None, None), Ok(None));
+        assert_eq!(key_action("local", false, None, Some("sk-old".into())), Ok(None));
+    }
 }
 
 /// 历史 task：`db query --readonly --jsonl`（U8 允许的唯一 SQL 出口）。
@@ -426,6 +476,8 @@ pub struct ProviderStatus {
     pub has_key: bool,
     /// 思考模式：`""` = 自动（跟随厂商默认）。向导据此回填。
     pub thinking: String,
+    /// 推理强度：`""` = 自动（不显式传）。界面只暴露这一项（2026-09-23）。
+    pub effort: String,
     /// `provider.json` 的位置，出错时让人知道去哪儿看。
     pub config_path: String,
 }
@@ -456,6 +508,10 @@ pub fn provider_status(state: State<'_, AppState>) -> Result<ProviderStatus, Str
         thinking: config
             .as_ref()
             .map(|c| c.thinking.clone())
+            .unwrap_or_default(),
+        effort: config
+            .as_ref()
+            .map(|c| c.effort.clone())
             .unwrap_or_default(),
         config_path: provider::path(&state.paths.data).display().to_string(),
     })
@@ -493,6 +549,7 @@ pub async fn provider_verify(
     base_url: String,
     api_key: Option<String>,
     thinking: Option<String>,
+    effort: Option<String>,
 ) -> Result<VerifyResult, String> {
     let spec = state.agent_spec()?;
     let config = ProviderConfig {
@@ -500,6 +557,7 @@ pub async fn provider_verify(
         model,
         base_url,
         thinking: thinking.unwrap_or_default(),
+        effort: effort.unwrap_or_default(),
     }
     .normalised();
     if !config.is_known_kind() {
@@ -538,12 +596,19 @@ pub async fn provider_save(
     base_url: String,
     api_key: Option<String>,
     thinking: Option<String>,
+    effort: Option<String>,
 ) -> Result<Value, String> {
+    // `None` = 这次调用没提这件事（向导只发它自己管的那几项）→ 沿用已保存的值，
+    // 别把用户在模型面板里调好的强度顺手清掉。
+    let previous = provider::load(&state.paths.data);
+    let thinking = thinking.or_else(|| previous.as_ref().map(|c| c.thinking.clone()));
+    let effort = effort.or_else(|| previous.as_ref().map(|c| c.effort.clone()));
     let config = ProviderConfig {
         provider,
         model,
         base_url,
         thinking: thinking.unwrap_or_default(),
+        effort: effort.unwrap_or_default(),
     }
     .normalised();
     if !config.is_known_kind() {
@@ -554,17 +619,21 @@ pub async fn provider_save(
         ));
     }
     let key = api_key.map(|key| key.trim().to_owned()).filter(|k| !k.is_empty());
-    if let Some(key) = key.as_ref() {
-        secrets::write(&config.provider, key)?;
-    } else if config.needs_key() {
-        return Err(format!(
-            "{} 需要 API key：把 key 填进向导，或改用 mock / local",
-            config.provider
-        ));
-    } else {
-        // mock / local 不需要 key：把上一次可能留下的 key 删掉，
-        // 免得下次启动又被注入进 sidecar。
-        let _ = secrets::delete();
+    match key_action(
+        &config.provider,
+        config.needs_key(),
+        key.clone(),
+        secrets::read().ok().flatten(),
+    )? {
+        Some(key) => secrets::write(&config.provider, &key)?,
+        // 没给新 key、但凭据管理器里有旧的：沿用（向导第 1 步与模型面板的文案
+        // 都是"留空 = 沿用已保存的 key"）。
+        None if config.needs_key() => {}
+        None => {
+            // mock / local 不需要 key：把上一次可能留下的 key 删掉，
+            // 免得下次启动又被注入进 sidecar。
+            let _ = secrets::delete();
+        }
     }
     provider::save(&state.paths.data, &config)?;
     let welcome = match restart_agent_inner(&state).await {
@@ -582,6 +651,34 @@ pub async fn provider_save(
         "key_stored": key.is_some(),
         "welcome": welcome,
     }))
+}
+
+/// 保存时该怎么处理 key：`Some(新 key 要写进去)` / `None`（沿用已存的，或本来就不需要）。
+///
+/// **2026-09-23 修的真 bug**：这里原来见 `None` 且"这个 provider 需要 key"就直接报错，
+/// 而模型面板只调强度 / 换模型时按设计发的是 `apiKey: null`（文案写着"key 沿用已保存的
+/// 那一个"）——于是**面板里的每一次保存都在写盘之前就失败了**：`provider.json` 停在旧版本，
+/// 界面上表现为"滑块能滑，选了关闭强度，设置里还是自动"。现在只有"需要 key 且凭据管理器里
+/// 也没有"才算错。
+fn key_action(
+    provider: &str,
+    needs_key: bool,
+    given: Option<String>,
+    stored: Option<String>,
+) -> Result<Option<String>, String> {
+    // 存进去的一定是去掉首尾空白的那个（向导里粘贴 key 常带空格/换行）。
+    if let Some(key) = given.filter(|key| !key.trim().is_empty()) {
+        return Ok(Some(key.trim().to_owned()));
+    }
+    if !needs_key {
+        return Ok(None);
+    }
+    if stored.filter(|key| !key.trim().is_empty()).is_some() {
+        return Ok(None);
+    }
+    Err(format!(
+        "{provider} 需要 API key：把 key 填进向导，或改用 mock / local"
+    ))
 }
 
 /// 清空配置（向导里的"重新配置"）：删凭据、删 `provider.json`，再重启 Agent。

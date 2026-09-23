@@ -11,6 +11,8 @@ import type {
 } from "./types";
 
 export interface AppInfo {
+  /** 外壳版本（`desktop/src-tauri/Cargo.toml`），设置里的「本机参数」显示它。 */
+  version: string;
   engine: string;
   agent: string;
   engine_program: string;
@@ -69,6 +71,8 @@ export interface ProviderStatus {
   has_key: boolean;
   /** 思考模式：`""` = 自动（跟随厂商默认）/ `enabled` / `disabled`。 */
   thinking: string;
+  /** 推理强度：`""` = 自动（不显式传）/ `low` / `high` / `max`。 */
+  effort: string;
   config_path: string;
 }
 
@@ -142,6 +146,7 @@ export const api = {
     baseUrl: string;
     apiKey: string | null;
     thinking?: string;
+    effort?: string;
   }) =>
     invoke<VerifyResult>("provider_verify", {
       provider: input.provider,
@@ -149,6 +154,7 @@ export const api = {
       baseUrl: input.baseUrl,
       apiKey: input.apiKey,
       thinking: input.thinking ?? null,
+      effort: input.effort ?? null,
     }),
   /** U7：存进凭据管理器 + `provider.json`，然后只重启 Agent。 */
   providerSave: (input: {
@@ -157,6 +163,7 @@ export const api = {
     baseUrl: string;
     apiKey: string | null;
     thinking?: string;
+    effort?: string;
   }) =>
     invoke<ProviderSaveResult>("provider_save", {
       provider: input.provider,
@@ -164,6 +171,7 @@ export const api = {
       baseUrl: input.baseUrl,
       apiKey: input.apiKey,
       thinking: input.thinking ?? null,
+      effort: input.effort ?? null,
     }),
   providerClear: () => invoke<{ removed_key: boolean; welcome: Welcome }>("provider_clear"),
   /** 模型下拉的数据源：`GET /models` 的模型名列表（拉不到就是空数组）。 */

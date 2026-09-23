@@ -113,6 +113,19 @@
       "cache_hit_tokens",
       "cache_miss_tokens"
     ],
+    "llm_round_started": [
+      "step",
+      "llm_calls",
+      "tool_calls",
+      "tokens_in",
+      "tokens_out",
+      "cost_cents",
+      "llm_ms",
+      "tool_ms",
+      "preloaded",
+      "cache_hit_tokens",
+      "cache_miss_tokens"
+    ],
     "tool_call_started": [
       "step",
       "tool_name",

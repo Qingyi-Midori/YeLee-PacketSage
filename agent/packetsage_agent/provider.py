@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, cast
@@ -35,10 +36,18 @@ PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 #: Providers that need a credential.
 PROVIDERS_NEEDING_KEY: tuple[str, ...] = ("openai", "deepseek")
 
+#: 推理强度的合法档位（DeepSeek `reasoning_effort`，见 thinking_mode 指南）。
+#: `off` = 关掉思考（`thinking.type=disabled`，不发强度）；其余三档原样发强度。
+EFFORT_LEVELS: tuple[str, ...] = ("off", "low", "high", "max")
+
 #: 流式帧的合并粒度（《GUI 工程规格书 v0.2》§4.5 `llm_delta`）：先到者 flush。
 #: 太碎会把 stdout 与外壳事件队列灌满，太粗就不像"正在打字"；这两个数是折中。
 DELTA_FLUSH_SECONDS = 0.12
 DELTA_FLUSH_CHARS = 256
+
+#: 一轮往返的墙钟上限（秒）：思考模式可以慢，但"永远不动"必须变成一条错误。
+#: 可用 `$PACKETSAGE_LLM_ROUND_TIMEOUT_S` 覆盖。
+DEFAULT_ROUND_TIMEOUT_S = 300.0
 
 
 class _StreamRejected(Exception):
@@ -47,6 +56,29 @@ class _StreamRejected(Exception):
     def __init__(self, status: int) -> None:
         super().__init__(f"HTTP {status}")
         self.status = status
+
+
+class LlmRoundTimeout(TimeoutError):
+    """一轮模型往返超过墙钟上限（TimeoutError 子类：归到"网络类"错误上报）。"""
+
+
+def _round_timeout_default() -> float:
+    """`$PACKETSAGE_LLM_ROUND_TIMEOUT_S`（秒），没设或非法就是 300。"""
+    raw = os.environ.get("PACKETSAGE_LLM_ROUND_TIMEOUT_S", "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_ROUND_TIMEOUT_S
+    return value if value > 0 else DEFAULT_ROUND_TIMEOUT_S
+
+
+#: 追问那一轮追加的一句：上文已经查过的东西不许再查一遍。
+FOLLOW_UP_NOTE = (
+    "\n\nThis turn continues an existing conversation: the tool results from earlier "
+    "turns are already in the messages above. Answer from them. Call a tool **only** "
+    "for something that is genuinely missing from the conversation so far, and say so "
+    "when you do."
+)
 
 
 def _cache_counts(usage: dict[str, Any]) -> tuple[int, int]:
@@ -66,6 +98,110 @@ def _clean_summary(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+#: 收尾信封里那段人话的字段名（`summary` 是正名，`answer` / `text` 是模型常写的别名），
+#: 允许外面套着 `"…"` / `[…]` / `{…}`，也允许中文冒号。
+_SUMMARY_FIELD = re.compile(r'(?i)["\[\{]?\s*(?:summary|answer|text)\s*["\]\}]?\s*[:：]\s*')
+#: `findings` 出现的位置：从那儿往后都是机器字段，不该出现在给人看的那段话里。
+_FINDINGS_FIELD = re.compile(r'(?i)["\[\{]?\s*findings\s*["\]\}]?\s*[:：]')
+
+
+def _salvage_summary(text: str) -> str | None:
+    """从**不是合法 JSON** 的收尾里，把那段人话捞出来。
+
+    实测（2026-09-23）：模型偶尔把信封写成
+
+        [summary]: "从工具结果看，这份抓包……"
+        [findings]: [{"title": "……", "severity": "info", …}]
+
+    ——键名被方括号包着，不是 JSON，`_loads_json` 解析不了；旧实现于是把整段原文当成
+    回答，界面上就是一段没清掉的 JSON（用户反馈"输出消息的 json 没有清理"）。
+    这里按"开头的 summary/answer/text 字段值，截到 findings 之前"取人话；
+    **只在文本确实以信封开头时才动它**，免得把一段正常回答从中间截断。
+    """
+    stripped = text.lstrip()
+    match = _SUMMARY_FIELD.match(stripped)
+    if match:
+        body = stripped[match.end() :]
+    elif stripped[:1] in ("{", "["):
+        # 信封长相（`{ [summary]: …` 这种语法不合法时）：剥掉开头的括号再找字段名；
+        # 找不到就认输——不乱猜一段回答。
+        inner = _SUMMARY_FIELD.match(stripped[1:].lstrip())
+        if not inner:
+            return None
+        body = stripped[1:].lstrip()[inner.end() :]
+    else:
+        # 普通散文（不以字段名或括号开头）：一个字都不动。
+        return None
+
+    cut = _FINDINGS_FIELD.search(body)
+    if cut:
+        body = body[: cut.start()]
+
+    body = body.strip().rstrip(",").strip()
+    if body.startswith('"'):
+        parsed = _loads_json(body)
+        if isinstance(parsed, str):
+            return parsed.strip() or None
+        body = body.strip('"').strip()
+    elif body.startswith("「") and body.endswith("」"):
+        body = body[1:-1].strip()
+    return body or None
+
+
+def _escape_literal_control_chars(text: str) -> str:
+    """把字符串字面量里的裸换行/制表符转义掉（JSON 只允许 `\\n` 这种写法）。
+
+    模型写长段落时经常直接把换行敲进 JSON 字符串里，严格解析会失败——但那是
+    格式瑕疵，不是"没回答"。
+    """
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            elif char == "\n":
+                out.append("\\n")
+                continue
+            elif char == "\r":
+                out.append("\\r")
+                continue
+            elif char == "\t":
+                out.append("\\t")
+                continue
+        elif char == '"':
+            in_string = True
+        out.append(char)
+    return "".join(out)
+
+
+def _loads_json(text: str) -> Any:
+    """宽松解析模型给的 JSON：先严格，再容忍裸控制字符；都不行返回 `None`。"""
+    for candidate in (text, _escape_literal_control_chars(text)):
+        try:
+            return json.loads(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _strip_code_fence(text: str) -> str:
+    """去掉 ```json … ``` 这层围栏（模型爱给的那种）。"""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    body = stripped[3:]
+    if body.lower().startswith("json"):
+        body = body[4:]
+    end = body.rfind("```")
+    return (body[:end] if end >= 0 else body).strip()
 
 
 def _http_error(httpx: Any, response: Any, url: str) -> Exception:
@@ -185,6 +321,11 @@ class Decision:
     cache_miss_tokens: int = 0
     #: 收尾那一轮模型自己写的一段话（`summary`）：对话里"它到底说了什么"。
     summary: str | None = None
+    #: 同一轮里每个工具调用的 id（官方多轮协议：工具结果要按 id 回填）。
+    call_ids: tuple[str | None, ...] = ()
+    #: 模型这一轮的原样消息（content / reasoning_content / tool_calls）：
+    #: 下一轮必须原样 append 回去，所以它不能在这里被改写。
+    message: dict[str, Any] | None = None
 
     def iter_calls(self) -> tuple[tuple[str, dict[str, Any]], ...]:
         """All tool calls of this round, in the model's order."""
@@ -456,6 +597,9 @@ class OpenAIProvider:
         mode: str = "run",
         prompt_version: str | None = None,
         thinking: str | None = None,
+        effort: str | None = None,
+        history: list[dict[str, Any]] | None = None,
+        round_timeout_s: float | None = None,
     ) -> None:
         self.name = "openai"
         self.model = model
@@ -469,6 +613,22 @@ class OpenAIProvider:
         #: 跟随厂商默认（DeepSeek 文档：思考模式默认打开）。想强制开关就设
         #: `PACKETSAGE_LLM_THINKING=enabled|disabled`。
         self.thinking = (thinking or os.environ.get("PACKETSAGE_LLM_THINKING") or "auto").lower()
+        #: 推理强度（`low`/`high`/`max`；空串 = 自动，不显式传）。
+        self.effort = (effort or os.environ.get("PACKETSAGE_LLM_EFFORT") or "").strip().lower()
+        if self.effort not in EFFORT_LEVELS:
+            self.effort = ""
+        #: 一轮往返的墙钟上限（秒）；思考模式再慢也不能无声无息地卡住。
+        self.round_timeout_s = (
+            round_timeout_s
+            if round_timeout_s is not None and round_timeout_s > 0
+            else _round_timeout_default()
+        )
+        #: 上一个回合的真实消息（跨回合记忆）：接在 system 之后、新问题之前。
+        self._seed_history = [
+            dict(item) for item in (history or []) if isinstance(item, dict)
+        ]
+        #: 本次 run 的完整消息表；第一轮之后只在尾部追加（官方多轮协议）。
+        self._messages: list[dict[str, Any]] | None = None
         self.base_url = (
             base_url
             or os.environ.get("PACKETSAGE_LLM_BASE_URL")
@@ -488,6 +648,57 @@ class OpenAIProvider:
                 "no API key: run `packetsage-agent setup`, or set "
                 "$PACKETSAGE_LLM_API_KEY (agent/.env works too)"
             )
+
+    # ------------------------------------------------- 多轮消息表（真实历史）
+    def history(self) -> list[dict[str, Any]]:
+        """本次 run 消息表的一份拷贝（跨回合记忆的载体，调用方只读）。"""
+        return [dict(item) for item in (self._messages or [])]
+
+    def _continue_conversation(
+        self, first_round: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """第一轮建表（system + 上一回合的真实消息 + 本轮问题），之后原样复用。
+
+        官方多轮协议（`guides/multi_round_chat`、`guides/thinking_mode`）：API 无状态，
+        调用方必须把 assistant 的原样消息与 `role="tool"` 的结果按序累积回传。
+        旧的实现每轮重建一份"伪造的工具记录"（assistant 里塞 JSON、结果当 user
+        消息），模型因此看不到自己真的做过什么，也拿不到 `tool_call_id`。
+        """
+        if self._messages is None:
+            seed = [item for item in self._seed_history if item.get("role") != "system"]
+            self._messages = [first_round[0], *seed, *first_round[1:]]
+        return self._messages
+
+    def _append_assistant(self, message: dict[str, Any] | None) -> None:
+        """把模型的原样回复追加进消息表（content / reasoning_content / tool_calls）。"""
+        if self._messages is None or not isinstance(message, dict):
+            return
+        entry: dict[str, Any] = {"role": "assistant", "content": message.get("content")}
+        for key in ("reasoning_content", "tool_calls"):
+            if message.get(key):
+                entry[key] = message[key]
+        self._messages.append(entry)
+
+    def record_tool_result(self, tool_call_id: str | None, content: str) -> None:
+        """记一次工具结果：`role="tool"` + `tool_call_id`（官方要求的那条消息）。"""
+        if self._messages is None:
+            return
+        entry: dict[str, Any] = {"role": "tool", "content": content}
+        if tool_call_id:
+            entry["tool_call_id"] = tool_call_id
+        self._messages.append(entry)
+
+    def record_answer(self, text: str) -> None:
+        """把兜底回答也写进消息表：用户看到了它，下一轮就必须看得到。"""
+        if self._messages is None or not text.strip():
+            return
+        self._messages.append({"role": "assistant", "content": text.strip()})
+
+    def record_note(self, text: str) -> None:
+        """把一段给模型看的注记写进消息表（V1-V4 的校验反馈走这里）。"""
+        if self._messages is None or not text.strip():
+            return
+        self._messages.append({"role": "user", "content": text.strip()})
 
     def decide(
         self,
@@ -531,6 +742,8 @@ class OpenAIProvider:
                     # 让模型第一步就进入分析而不是探索。
                     + (f"\n\n{facts}" if facts else "")
                     + (f"\n\nTask goal: {goal}" if goal else "")
+                    # 追问：上文已经有过工具结果，别再把同一件事查一遍。
+                    + (FOLLOW_UP_NOTE if self._seed_history else "")
                     + "\n\nStart the analysis."
                     # 收尾指令放在**第一条消息里**，不放尾部：放在尾部会让每轮
                     # 都多出一条位置不同的消息，前缀缓存从那里往后全部失效。
@@ -541,20 +754,9 @@ class OpenAIProvider:
                 ),
             },
         ]
-        for entry in trace:
-            assistant: dict[str, Any] = {
-                "role": "assistant",
-                "content": json.dumps(
-                    {"tool": entry["tool_name"], "args": entry["args"]}, ensure_ascii=False
-                ),
-            }
-            # 官方文档（thinking_mode）：请求带 `tools` 时，历史轮次的
-            # `reasoning_content` **应当回传**，并会被拼进上下文。不回传 = 模型
-            # 每轮都从零开始想，且与前缀缓存的实际内容不一致。
-            if entry.get("reasoning"):
-                assistant["reasoning_content"] = entry["reasoning"]
-            messages.append(assistant)
-            messages.append({"role": "user", "content": entry["result_summary"]})
+        # 历史只累积、不重建：assistant 的真实回合由 `_append_assistant` 追加，
+        # 工具结果由 `record_tool_result` 以 `role="tool"` 追加（官方多轮协议）。
+        messages = self._continue_conversation(messages)
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -568,18 +770,25 @@ class OpenAIProvider:
         if on_delta is not None and self.streaming is not False:
             streamed = self._decide_streaming(httpx, url, headers, payload, on_delta)
             if streamed is not None:
+                self._append_assistant(streamed.message)
                 return streamed
-        response = httpx.post(url, headers=headers, json=payload, timeout=60)
+        response = httpx.post(url, headers=headers, json=payload, timeout=self.round_timeout_s)
         if response.status_code >= 400 and "thinking" in payload:
             # 端点不认 `thinking`（各家网关对未知字段的容忍度不同）：去掉它重发一次。
             # 思考模式是可选增强，**不该让整个调查挂掉**（用户 2026-09-22 实测）。
             self.thinking = "auto"
             retry = {key: value for key, value in payload.items() if key != "thinking"}
-            response = httpx.post(url, headers=headers, json=retry, timeout=60)
+            response = httpx.post(
+                url, headers=headers, json=retry, timeout=self.round_timeout_s
+            )
         if response.status_code >= 400:
             raise _http_error(httpx, response, url)
         body = response.json()
-        return self._decision_from_message(body["choices"][0]["message"], body.get("usage", {}))
+        message = body["choices"][0]["message"]
+        decision = self._decision_from_message(message, body.get("usage", {}))
+        # 官方多轮协议：这一轮的 assistant 消息原样进历史（含 reasoning_content）。
+        self._append_assistant(message)
+        return decision
 
     def answer(self, task_id: str, question: str, trace: list[dict]) -> str | None:
         """追问的**兜底回答**：不带工具再问一次"用几句话回答用户"。
@@ -589,23 +798,41 @@ class OpenAIProvider:
         """
         import httpx
 
-        from .prompts import CHAT_ANSWER_ONLY, render_system_prompt
+        from .prompts import Mode, answer_only_instruction, render_system_prompt
 
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": render_system_prompt(task_id, "chat", self.prompt_version),
-            },
-            {"role": "user", "content": f"用户的问题：{question}"},
-        ]
-        for entry in trace[-8:]:
-            messages.append(
+        if self._messages is not None:
+            # 本轮的真实消息表就在手上：直接把"只回答、不带工具"这条指令接上去。
+            messages: list[dict[str, Any]] = [
+                *self._messages,
+                {"role": "user", "content": answer_only_instruction(self.mode)},
+            ]
+        else:
+            messages = [
+                {
+                    "role": "system",
+                    "content": render_system_prompt(
+                        task_id, cast("Mode", self.mode), self.prompt_version
+                    ),
+                },
                 {
                     "role": "user",
-                    "content": f"[{entry.get('tool_name')}] {entry.get('result_summary')}",
-                }
+                    "content": (
+                        f"用户的问题：{question}"
+                        if self.mode == "chat"
+                        else f"这次调查的目标：{question}"
+                    ),
+                },
+            ]
+            for entry in trace[-8:]:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[{entry.get('tool_name')}] {entry.get('result_summary')}",
+                    }
+                )
+            messages.append(
+                {"role": "user", "content": answer_only_instruction(self.mode)}
             )
-        messages.append({"role": "user", "content": CHAT_ANSWER_ONLY})
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -618,15 +845,18 @@ class OpenAIProvider:
                 f"{self.base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json=payload,
-                timeout=60,
+                timeout=self.round_timeout_s,
             )
             if response.status_code >= 400:
                 return None
             content = response.json()["choices"][0]["message"].get("content") or ""
-            parsed = json.loads(content)
         except Exception:  # noqa: BLE001 - 兜底失败不能反过来弄挂 run
             return None
-        return _clean_summary(parsed.get("summary") if isinstance(parsed, dict) else None)
+        parsed = _loads_json(_strip_code_fence(content))
+        if isinstance(parsed, dict):
+            return _clean_summary(parsed.get("summary")) or _clean_summary(parsed.get("answer"))
+        # 模型没按 JSON 写：这段散文就是回答（不再当"没答上"）。
+        return _clean_summary(content)
 
     def _thinking_params(self) -> dict[str, Any]:
         """思考模式开关（DeepSeek 专有字段，见 thinking_mode 指南）。
@@ -637,9 +867,17 @@ class OpenAIProvider:
         `enabled` / `disabled`：显式传 `{"thinking": {"type": ...}}`（用
         `PACKETSAGE_LLM_THINKING` 覆盖，适合"这次不算了我只要快"的场合）。
         """
+        params: dict[str, Any] = {}
+        if self.effort == "off":
+            # 最低档 = 关掉思考：这比"不显式传"更明确，也不会白花 thinking 的钱。
+            params["thinking"] = {"type": "disabled"}
+            return params
         if self.thinking in ("enabled", "disabled"):
-            return {"thinking": {"type": self.thinking}}
-        return {}
+            params["thinking"] = {"type": self.thinking}
+        if self.effort in EFFORT_LEVELS:
+            # 强度与开关是两件事：开着思考也能选 low / high / max（官方映射表）。
+            params["reasoning_effort"] = self.effort
+        return params
 
     def _decide_streaming(
         self,
@@ -681,10 +919,21 @@ class OpenAIProvider:
         reasoning_text = ""
         calls: dict[int, dict[str, Any]] = {}
         usage: dict[str, Any] = {}
-        with httpx.stream("POST", url, headers=headers, json=body, timeout=60) as response:
+        started = time.monotonic()
+        with httpx.stream(
+            "POST", url, headers=headers, json=body, timeout=self.round_timeout_s
+        ) as response:
             if response.status_code >= 400:
                 raise _StreamRejected(response.status_code)
             for line in response.iter_lines():
+                # 墙钟上限：心跳注释算"还活着"，但整轮不许无限期拖下去——界面
+                # 看起来卡住时，用户至少能拿到一句明确的失败原因。
+                if time.monotonic() - started > self.round_timeout_s:
+                    raise LlmRoundTimeout(
+                        f"模型这一轮超过 {self.round_timeout_s:.0f} 秒仍未结束（已收到 "
+                        f"{len(content) + len(reasoning_text)} 字符）；这一轮已中止，"
+                        "可以重试，或设 `PACKETSAGE_LLM_THINKING=disabled` 换更快的模式"
+                    )
                 if not line or line.startswith(":"):
                     continue  # 空行与心跳注释
                 if not line.startswith("data:"):
@@ -744,12 +993,13 @@ class OpenAIProvider:
                 }
                 for index in sorted(calls)
             ]
-        # 没有 usage 就等于预算里的 tokens 归零：不编数字，但把流式关掉止损。
+        # 没有 usage 就等于预算里的 tokens 归零：不编数字，run 的 notes 里说明。
+        # （不关流式：关掉之后每轮都变成"界面上什么都不发生"，那正是卡住的观感来源。）
         missing = not (usage.get("prompt_tokens") or usage.get("completion_tokens"))
-        if missing:
-            self.streaming = False
         decision = self._decision_from_message(message, usage)
         decision.usage_missing = missing
+        # 原样留下这一轮的 assistant 消息：下一轮要 append 回 messages。
+        decision.message = message
         return decision
 
     def _decision_from_message(self, message: dict[str, Any], usage: dict[str, Any]) -> Decision:
@@ -762,6 +1012,7 @@ class OpenAIProvider:
             # 一轮里模型可以请求多个工具（互不依赖的那些）。全部收下，循环里
             # 依次执行——省下的是 LLM 往返，不是工具时间。
             parsed_calls: list[tuple[str, dict[str, Any]]] = []
+            call_ids: list[str | None] = []
             for call in calls:
                 function = call["function"]
                 try:
@@ -777,24 +1028,29 @@ class OpenAIProvider:
                         reasoning=reasoning,
                         cache_hit_tokens=cache_hit,
                         cache_miss_tokens=cache_miss,
+                        message=message,
                     )
                 parsed_calls.append((str(function.get("name")), parsed_args))
+                call_ids.append(call.get("id"))
             first_tool, first_args = parsed_calls[0]
             return Decision(
                 kind="tool",
                 tool=first_tool,
                 args=first_args,
                 calls=tuple(parsed_calls),
+                call_ids=tuple(call_ids),
                 tokens_in=usage.get("prompt_tokens", 0),
                 tokens_out=usage.get("completion_tokens", 0),
                 reasoning=reasoning,
                 cache_hit_tokens=cache_hit,
                 cache_miss_tokens=cache_miss,
+                message=message,
             )
-        content = message.get("content") or "{}"
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
+        raw = message.get("content")
+        text = raw.strip() if isinstance(raw, str) else ""
+        if not text:
+            # 既没有工具调用、也没有一个字：真空轮，值得重试一次（原来的
+            # "malformed" 分支只剩这一种含义）。
             return Decision(
                 kind="final",
                 findings=[],
@@ -804,16 +1060,47 @@ class OpenAIProvider:
                 reasoning=reasoning,
                 cache_hit_tokens=cache_hit,
                 cache_miss_tokens=cache_miss,
+                message=message,
             )
+        parsed: Any = None
+        if text.startswith("{"):
+            parsed = _loads_json(text)
+        elif text.startswith("```"):
+            # 模型把 JSON 包在代码围栏里：拆掉围栏再解析（拿不到就退化成散文）。
+            parsed = _loads_json(_strip_code_fence(text))
+        if isinstance(parsed, dict):
+            findings = parsed.get("findings")
+            # `summary` 是给人看的那段回答；answer/text 是模型常见的别名。
+            summary = (
+                _clean_summary(parsed.get("summary"))
+                or _clean_summary(parsed.get("answer"))
+                or _clean_summary(parsed.get("text"))
+            )
+            return Decision(
+                kind="final",
+                findings=findings if isinstance(findings, list) else [],
+                summary=summary,
+                tokens_in=usage.get("prompt_tokens", 0),
+                tokens_out=usage.get("completion_tokens", 0),
+                reasoning=reasoning,
+                cache_hit_tokens=cache_hit,
+                cache_miss_tokens=cache_miss,
+                message=message,
+            )
+        # 模型直接写了人话：**这段就是回答**。旧实现把它判成 malformed 丢掉，
+        # 于是"调查跑完了却一句人话都没有"（用户 2026-09-23 实测）。
+        # 但如果这段是**不是合法 JSON 的信封**（`[summary]: … [findings]: …`），
+        # 只把人话那一段留下——原文照旧全在时间线的「输出 · 原文」里，不丢。
         return Decision(
             kind="final",
-            findings=parsed.get("findings", []),
-            summary=_clean_summary(parsed.get("summary")),
+            findings=[],
+            summary=_clean_summary(_salvage_summary(text) or text),
             tokens_in=usage.get("prompt_tokens", 0),
             tokens_out=usage.get("completion_tokens", 0),
             reasoning=reasoning,
             cache_hit_tokens=cache_hit,
             cache_miss_tokens=cache_miss,
+            message=message,
         )
 
 
@@ -826,6 +1113,7 @@ def build_provider(
     base_url: str | None = None,
     api_key: str | None = None,
     thinking: str | None = None,
+    history: list[dict[str, Any]] | None = None,
 ):  # noqa: ANN201 - provider interface is duck typed
     """Factory for the three supported provider kinds."""
     if kind == "mock":
@@ -840,6 +1128,7 @@ def build_provider(
             mode=mode,
             prompt_version=prompt_version,
             thinking=thinking,
+            history=history,
         )
     if kind == "deepseek":
         return OpenAIProvider(
@@ -849,6 +1138,7 @@ def build_provider(
             mode=mode,
             prompt_version=prompt_version,
             thinking=thinking,
+            history=history,
         )
     if kind == "local":
         return OpenAIProvider(
@@ -858,6 +1148,7 @@ def build_provider(
             mode=mode,
             prompt_version=prompt_version,
             thinking=thinking,
+            history=history,
         )
     raise ValueError(f"unknown provider kind {kind!r}")
 

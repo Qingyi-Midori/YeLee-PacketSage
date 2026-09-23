@@ -67,6 +67,21 @@ PROTOCOL_SNAPSHOT = {
             "cache_hit_tokens",
             "cache_miss_tokens",
         ],
+        # v0.6：一轮**开始**也发一条（字段与 `llm_round` 同形）。旧协议只在
+        # 轮次结束后发，模型慢慢想的那几分钟面板一动不动——那正是"卡住"的观感。
+        "llm_round_started": [
+            "step",
+            "llm_calls",
+            "tool_calls",
+            "tokens_in",
+            "tokens_out",
+            "cost_cents",
+            "llm_ms",
+            "tool_ms",
+            "preloaded",
+            "cache_hit_tokens",
+            "cache_miss_tokens",
+        ],
         "tool_call_started": ["step", "tool_name", "args"],
         "tool_call_finished": ["step", "tool_name", "args", "status", "duration_ms", "tc_id", "result_summary"],
         "finding_accepted": ["id", "severity", "basis", "title", "evidence_ids"],
