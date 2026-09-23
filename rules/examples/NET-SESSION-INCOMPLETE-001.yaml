@@ -1,0 +1,19 @@
+id: NET-SESSION-INCOMPLETE-001
+version: 1
+name: 会话残留缺口
+severity: info
+scope: session
+match:
+  protocol: tcp
+threshold:
+  metric: count
+  group_by: [session]
+  window: 1m
+  operator: gte
+  value: 1
+dedupe:
+  per_group_cooldown: 1m
+description: >
+  会话级别的示例规则：在 SessionSummary 事件上评估，
+  证据中携带会话终态（含 Incomplete / BufferOverflow）。
+tags: [session]

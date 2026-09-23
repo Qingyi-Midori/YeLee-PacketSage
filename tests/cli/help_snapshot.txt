@@ -1,0 +1,282 @@
+$ packetsage --help
+   :::   ::: :::::::::: :::        :::::::::: :::::::::: :::
+  :+:   :+: :+:        :+:        :+:        :+:        :+
+  +:+ +:+  +:+        +:+        +:+        +:+
+  +#++:   +#++:++#   +#+        +#++:++#   +#++:++#
+  +#+    +#+        +#+        +#+        +#+
+ #+#    #+#        #+#        #+#        #+#
+###    ########## ########## ########## ##########
+      :::::::::     :::      ::::::::  :::    ::: :::::::::: :::::::::::  ::::::::      :::      ::::::::  ::::::::::
+     :+:    :+:  :+: :+:   :+:    :+: :+:   :+:  :+:            :+:      :+:    :+:   :+: :+:   :+:    :+: :+:
+    +:+    +:+ +:+   +:+  +:+        +:+  +:+   +:+            +:+      +:+         +:+   +:+  +:+        +:+
+   +#++:++#+ +#++:++#++: +#+        +#++:++    +#++:++#       +#+      +#++:++#++ +#++:++#++: :#:        +#++:++#
+  +#+       +#+     +#+ +#+        +#+  +#+   +#+            +#+             +#+ +#+     +#+ +#+   +#+# +#+
+ #+#       #+#     #+# #+#    #+# #+#   #+#  #+#            #+#      #+#    #+# #+#     #+# #+#    #+# #+#
+###       ###     ###  ########  ###    ### ##########     ###       ########  ###     ###  ########  ##########
+
+
+PCAP/PCAPNG analysis engine (Rust) with a JSONL RPC worker
+
+Usage: packetsage [OPTIONS] [COMMAND]
+
+Commands:
+  version      Print the engine version, event schema version and build metadata
+  doctor       Check the local installation (10 checks, `--json` for scripts)
+  analyze      Analyse a capture file
+  serve        Run the JSONL RPC worker on stdin/stdout
+  query        Query an analysed task from the database
+  db           Inspect or migrate the database (read-only queries only)
+  rules        List or validate rules
+  chat         Interactive agent session (launcher for the Python agent)
+  schema       Print the event / RPC schema digest
+  completions  Print a shell completion script
+
+Options:
+  -V, --version        Print the version line and exit (`-V`)
+  -v, --verbose...     Increase log verbosity on stderr: `-v` = info, `-vv` = debug + config dump
+  -q, --quiet          Quiet: no progress and no info logs (errors and warnings still reach stderr)
+      --config <PATH>  Explicit configuration file (overrides $PACKETSAGE_CONFIG and ./packetsage.yaml)
+      --no-color       Disable ANSI styling (also honoured via a non-empty $NO_COLOR)
+  -h, --help           Print help
+
+Examples:
+  packetsage analyze samples/synth-mixed.pcap
+  packetsage analyze samples/synth-mixed.pcap --jsonl > events.jsonl
+  packetsage db query --readonly --sql "SELECT id, status FROM analysis_tasks"
+  packetsage chat samples/synth-mixed.pcap
+
+Exit codes: 0 ok, 1 usage, 2 capture, 3 config/db/llm, 4 internal, 5 unsupported.
+
+$ packetsage analyze --help
+Analyse a capture file
+
+Usage: packetsage analyze [OPTIONS] <CAPTURE>
+
+Arguments:
+  <CAPTURE>
+          Capture file (pcap / pcapng)
+
+Options:
+      --task-id <ID>
+          Pin the task id (`task_<ulid>`) instead of generating one.
+          
+          Useful for reproducible pipelines, for re-running an analysis under the same identity, and for the event-stream determinism test.
+
+  -V, --version
+          Print the version line and exit (`-V`)
+
+      --jsonl
+          Emit the JSONL event stream on stdout (this sub-command's machine stream)
+
+  -v, --verbose...
+          Increase log verbosity on stderr: `-v` = info, `-vv` = debug + config dump
+
+      --json <PATH>
+          Write the event stream to a file instead of stdout
+
+  -q, --quiet
+          Quiet: no progress and no info logs (errors and warnings still reach stderr)
+
+      --config <PATH>
+          Explicit configuration file (overrides $PACKETSAGE_CONFIG and ./packetsage.yaml)
+
+      --limit-events <LIMIT_EVENTS>
+          Limit the number of emitted events (0 = unlimited)
+          
+          [default: 0]
+
+      --no-color
+          Disable ANSI styling (also honoured via a non-empty $NO_COLOR)
+
+      --rules-dir <DIR>
+          Rules directory
+
+      --no-rules
+          Disable the rule engine
+
+      --full
+          Run the full pipeline (rules + agent + report)
+
+      --db <URL>
+          Persist the task into a database
+
+      --report <PATH>
+          Report path for `--full`
+
+      --python <PYTHON>
+          Python interpreter used by `--full`
+          
+          [default: python]
+
+      --provider <PROVIDER>
+          Provider used by the agent stage (`mock`, `openai`, `local`)
+
+      --model <MODEL>
+          Model name for the agent stage
+
+      --errors-only
+          Emit only packets that carry decode errors
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Example:
+  packetsage analyze samples/synth-mixed.pcap
+  packetsage analyze capture.pcap --jsonl > events.jsonl
+
+$ packetsage doctor --help
+Check the local installation (10 checks, `--json` for scripts)
+
+Usage: packetsage doctor [OPTIONS]
+
+Options:
+      --rules-dir <DIR>    Rules directory to load (CLI > $PACKETSAGE_RULES_PATH > config > `rules`)
+  -V, --version            Print the version line and exit (`-V`)
+      --samples-dir <DIR>  Samples directory to probe
+  -v, --verbose...         Increase log verbosity on stderr: `-v` = info, `-vv` = debug + config dump
+      --db <URL>           Database URL to verify
+  -q, --quiet              Quiet: no progress and no info logs (errors and warnings still reach stderr)
+      --config <PATH>      Explicit configuration file (overrides $PACKETSAGE_CONFIG and ./packetsage.yaml)
+      --no-net             Skip the checks that need the network (only the reachability probe of item 8)
+      --json               Emit the report as JSON (stable json output format v1)
+      --no-color           Disable ANSI styling (also honoured via a non-empty $NO_COLOR)
+  -h, --help               Print help
+
+Example:
+  packetsage doctor
+  packetsage doctor --json --no-net
+
+$ packetsage db --help
+Inspect or migrate the database (read-only queries only)
+
+Usage: packetsage db [OPTIONS] <COMMAND>
+
+Commands:
+  query    Run a read-only SQL statement (`--readonly` is mandatory, fail-closed)
+  migrate  Apply the pending migrations (interactive confirmation, or `--yes`)
+
+Options:
+  -V, --version        Print the version line and exit (`-V`)
+  -v, --verbose...     Increase log verbosity on stderr: `-v` = info, `-vv` = debug + config dump
+      --db <URL>       Database URL
+  -q, --quiet          Quiet: no progress and no info logs (errors and warnings still reach stderr)
+      --config <PATH>  Explicit configuration file (overrides $PACKETSAGE_CONFIG and ./packetsage.yaml)
+      --no-color       Disable ANSI styling (also honoured via a non-empty $NO_COLOR)
+  -h, --help           Print help
+
+Example:
+  packetsage db query --readonly --db "sqlite://packetsage.db?mode=ro" --sql "SELECT id FROM analysis_tasks"
+  packetsage db migrate --yes
+
+$ packetsage db query --help
+Run a read-only SQL statement (`--readonly` is mandatory, fail-closed)
+
+Usage: packetsage db query [OPTIONS] --sql <SQL>
+
+Options:
+      --readonly           Acknowledge the read-only contract; without it the query is refused
+  -V, --version            Print the version line and exit (`-V`)
+      --sql <SQL>          The statement to run (`SELECT` / `WITH` / `EXPLAIN` only)
+  -v, --verbose...         Increase log verbosity on stderr: `-v` = info, `-vv` = debug + config dump
+      --db <URL>           Database URL
+      --limit <LIMIT>      Maximum rows (default 200, hard upper bound 10000) [default: 200]
+  -q, --quiet              Quiet: no progress and no info logs (errors and warnings still reach stderr)
+      --config <PATH>      Explicit configuration file (overrides $PACKETSAGE_CONFIG and ./packetsage.yaml)
+      --timeout <TIMEOUT>  Connection and lock-wait timeout in seconds [default: 10]
+      --jsonl              Emit one JSON object per row (this sub-command's machine stream)
+      --no-color           Disable ANSI styling (also honoured via a non-empty $NO_COLOR)
+  -h, --help               Print help
+
+The URL must contain `mode=ro`; this command never creates a database.
+
+$ packetsage chat --help
+Interactive agent session (launcher for the Python agent)
+
+Usage: packetsage chat [OPTIONS] <CAPTURE>
+
+Arguments:
+  <CAPTURE>
+          Capture file
+
+Options:
+      --python <PYTHON>
+          Python interpreter used by the `python -m` fallback launcher step
+          
+          [default: python]
+
+  -V, --version
+          Print the version line and exit (`-V`)
+
+      --db <URL>
+          Database URL the analysed task is persisted to and recovered from.
+          
+          The agent drives its own `serve` worker, which recovers the task from this database (ADR-019); default: `storage.url` / `$PACKETSAGE_STORAGE_URL`.
+
+  -v, --verbose...
+          Increase log verbosity on stderr: `-v` = info, `-vv` = debug + config dump
+
+      --provider <PROVIDER>
+          Provider
+
+  -q, --quiet
+          Quiet: no progress and no info logs (errors and warnings still reach stderr)
+
+      --config <PATH>
+          Explicit configuration file (overrides $PACKETSAGE_CONFIG and ./packetsage.yaml)
+
+      --model <MODEL>
+          Model
+
+      --no-color
+          Disable ANSI styling (also honoured via a non-empty $NO_COLOR)
+
+      --task-id <TASK_ID>
+          Reuse an already analysed (persisted) task instead of analysing again
+
+      --scenario <SCENARIO>
+          Evaluation scenario for the mock provider
+
+      --report <PATH>
+          Generate a report when the session ends
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Example:
+  packetsage chat samples/synth-mixed.pcap
+
+The Python agent is resolved through $PACKETSAGE_AGENT_BIN, PATH (packetsage-agent),
+./agent/.venv, then `python -m packetsage_agent`.
+
+$ packetsage version --help
+Print the engine version, event schema version and build metadata
+
+Usage: packetsage version [OPTIONS]
+
+Options:
+      --json           Emit the stable machine readable form (json output format v1)
+  -V, --version        Print the version line and exit (`-V`)
+  -v, --verbose...     Increase log verbosity on stderr: `-v` = info, `-vv` = debug + config dump
+  -q, --quiet          Quiet: no progress and no info logs (errors and warnings still reach stderr)
+      --config <PATH>  Explicit configuration file (overrides $PACKETSAGE_CONFIG and ./packetsage.yaml)
+      --no-color       Disable ANSI styling (also honoured via a non-empty $NO_COLOR)
+  -h, --help           Print help
+
+$ packetsage completions --help
+Print a shell completion script
+
+Usage: packetsage completions [OPTIONS] <SHELL>
+
+Arguments:
+  <SHELL>  Shell to generate the completion script for [possible values: bash, elvish, fish, powershell, zsh]
+
+Options:
+  -V, --version        Print the version line and exit (`-V`)
+  -v, --verbose...     Increase log verbosity on stderr: `-v` = info, `-vv` = debug + config dump
+  -q, --quiet          Quiet: no progress and no info logs (errors and warnings still reach stderr)
+      --config <PATH>  Explicit configuration file (overrides $PACKETSAGE_CONFIG and ./packetsage.yaml)
+      --no-color       Disable ANSI styling (also honoured via a non-empty $NO_COLOR)
+  -h, --help           Print help
+
+Example (zsh):
+  packetsage completions zsh > ~/.zfunc/_packetsage

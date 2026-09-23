@@ -1,0 +1,56 @@
+[package]
+name = "packetsage-fuzz-targets"
+version = "3.8.1"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+packetsage-fuzz = { path = "../crates/packetsage-fuzz" }
+
+[[bin]]
+name = "fuzz_pcap"
+path = "fuzz_targets/fuzz_pcap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_pcapng"
+path = "fuzz_targets/fuzz_pcapng.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_decoder"
+path = "fuzz_targets/fuzz_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_config_yaml"
+path = "fuzz_targets/fuzz_config_yaml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_rules_yaml"
+path = "fuzz_targets/fuzz_rules_yaml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_rpc_jsonl"
+path = "fuzz_targets/fuzz_rpc_jsonl.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

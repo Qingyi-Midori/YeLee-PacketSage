@@ -1,0 +1,208 @@
+{
+  "protocol_version": 1,
+  "capabilities": [
+    "run",
+    "chat",
+    "report",
+    "cancel",
+    "stream_events"
+  ],
+  "commands": {
+    "hello": {
+      "params": [
+        "protocol_version",
+        "client",
+        "client_version"
+      ],
+      "result": [
+        "protocol_version",
+        "agent_version",
+        "schema_version",
+        "capabilities",
+        "providers"
+      ]
+    },
+    "run": {
+      "params": [
+        "task_id",
+        "goal",
+        "mode",
+        "prompt_version"
+      ],
+      "result": [
+        "run_id"
+      ]
+    },
+    "chat": {
+      "params": [
+        "task_id",
+        "question"
+      ],
+      "result": [
+        "run_id"
+      ]
+    },
+    "report": {
+      "params": [
+        "task_id",
+        "out_path"
+      ],
+      "result": [
+        "report_path",
+        "sha256",
+        "degraded",
+        "unverified_items",
+        "status",
+        "template_version",
+        "prompt_version"
+      ]
+    },
+    "cancel": {
+      "params": [
+        "run_id"
+      ],
+      "result": []
+    },
+    "status": {
+      "params": [],
+      "result": [
+        "engine_alive",
+        "run",
+        "budget"
+      ]
+    },
+    "shutdown": {
+      "params": [],
+      "result": []
+    }
+  },
+  "events": {
+    "welcome": [
+      "protocol_version",
+      "agent_version",
+      "schema_version",
+      "capabilities",
+      "providers"
+    ],
+    "run_started": [
+      "run_id",
+      "task_id",
+      "mode",
+      "model",
+      "provider",
+      "prompt_version",
+      "budget"
+    ],
+    "llm_delta": [
+      "step",
+      "channel",
+      "text",
+      "tool_name",
+      "tool_index"
+    ],
+    "llm_round": [
+      "step",
+      "llm_calls",
+      "tool_calls",
+      "tokens_in",
+      "tokens_out",
+      "cost_cents",
+      "llm_ms",
+      "tool_ms",
+      "preloaded",
+      "cache_hit_tokens",
+      "cache_miss_tokens"
+    ],
+    "tool_call_started": [
+      "step",
+      "tool_name",
+      "args"
+    ],
+    "tool_call_finished": [
+      "step",
+      "tool_name",
+      "args",
+      "status",
+      "duration_ms",
+      "tc_id",
+      "result_summary"
+    ],
+    "finding_accepted": [
+      "id",
+      "severity",
+      "basis",
+      "title",
+      "evidence_ids"
+    ],
+    "finding_rejected": [
+      "title",
+      "reason_code",
+      "reason"
+    ],
+    "report_written": [
+      "report_path",
+      "sha256",
+      "degraded",
+      "unverified_items",
+      "status",
+      "template_version",
+      "prompt_version"
+    ],
+    "run_finished": [
+      "summary_version",
+      "run_id",
+      "task_id",
+      "status",
+      "stop_reason",
+      "accepted",
+      "submit_rejects",
+      "malformed_output",
+      "steps",
+      "calls",
+      "tool_calls",
+      "tokens",
+      "cache",
+      "cost_cents",
+      "prompt_version",
+      "model",
+      "provider",
+      "summary",
+      "findings"
+    ],
+    "error": [
+      "code",
+      "message",
+      "retryable",
+      "where"
+    ]
+  },
+  "error_codes": [
+    "PROTOCOL_MISMATCH",
+    "TASK_NOT_FOUND",
+    "CONFIG",
+    "PROVIDER_UNREACHABLE",
+    "ENGINE_CRASHED",
+    "ENGINE_SPAWN",
+    "TOOL_TIMEOUT",
+    "BUSY",
+    "INTERNAL",
+    "ANTI_HALLUCINATION"
+  ],
+  "event_max_bytes": 8192,
+  "envelope": {
+    "ack": [
+      "id",
+      "type",
+      "ok",
+      "result|error"
+    ],
+    "event": [
+      "type",
+      "event",
+      "run_id",
+      "seq",
+      "ts_unix_ms",
+      "data"
+    ]
+  }
+}

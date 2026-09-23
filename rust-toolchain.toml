@@ -1,0 +1,6 @@
+[toolchain]
+# MSRV is declared as 1.80 in [workspace.package] rust-version (see M0~M2 §2.4).
+# The pinned channel here is the implementation toolchain used by this workspace.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "default"

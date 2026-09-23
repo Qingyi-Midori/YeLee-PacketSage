@@ -1,0 +1,25 @@
+[package]
+name = "packetsage-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "PacketSage L1: capture reader, protocol decoder, reassembly, aggregation, query"
+
+[dependencies]
+packetsage-protocol = { workspace = true }
+pcap-parser = { workspace = true }
+etherparse = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+ulid = { workspace = true }
+humantime-serde = { workspace = true }
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

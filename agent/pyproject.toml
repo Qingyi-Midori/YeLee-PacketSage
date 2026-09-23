@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "packetsage-agent"
+version = "3.8.1"
+description = "YeLee' PacketSage agent: LLM tool orchestration over the Rust engine JSONL RPC"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# The Streamlit GUI is an extra so the deterministic mock loop, the CLI and the
+# unit tests still run in a bare interpreter (see 《GUI 工程规格书 v0.1》U8).
+gui = [
+    "streamlit>=1.40",
+]
+# The LangChain agent integration is optional so the deterministic mock loop and
+# the unit tests can run in a bare interpreter (see M3~M6 §11 #15).
+langchain = [
+    "langchain>=0.3,<0.5",
+    "langchain-openai>=0.2",
+]
+templates = ["jinja2>=3.1"]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "uv>=0.5",
+]
+
+[project.scripts]
+packetsage-agent = "packetsage_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["packetsage_agent*"]
+
+[tool.setuptools.package-data]
+# The ASCII title and the prompt texts ship as data (`banner.py` / `prompts.py`).
+packetsage_agent = ["banner.txt", "prompts_text/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# G2-1: explicit, deterministic lint surface. The rule families below are the
+# ones this project already follows; widening the set is a deliberate change.
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["packetsage_agent", "tests"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W", "I", "UP", "B", "C4"]
+
+# G2-2: first pass allows missing third-party stubs (`--ignore-missing-imports`
+# lives here, in the config, so CI and a local run always agree).
+[tool.mypy]
+python_version = "3.10"
+files = ["packetsage_agent"]
+# The LangChain extra has no stubs in this tree; importing it is optional.
+ignore_missing_imports = true
+warn_unused_ignores = false
+show_error_codes = true

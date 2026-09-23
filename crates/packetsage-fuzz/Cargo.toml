@@ -1,0 +1,33 @@
+[package]
+name = "packetsage-fuzz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Stable fuzz smoke harness for the PacketSage parsing paths (M6)"
+
+[[bin]]
+name = "fuzz-smoke"
+path = "src/main.rs"
+# The smoke runner is a long running tool, not a unit test binary: `cargo test`
+# must not execute a 10 s+ fuzz campaign (and some host AV products quarantine
+# freshly linked console binaries, which would turn `cargo test` into an
+# environment failure). Its logic is covered by `src/lib.rs` tests.
+test = false
+doctest = false
+bench = false
+
+[lib]
+name = "packetsage_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+packetsage-protocol = { workspace = true }
+packetsage-core = { workspace = true }
+packetsage-rules = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+id: NET-TCP-PORT-SWEEP-001
+version: 1
+name: TCP 端口扫描特征
+severity: medium
+scope: packet
+match:
+  protocol: tcp
+  flags:
+    contains: [SYN]
+    excludes: [ACK]
+threshold:
+  metric: distinct_count
+  field: dst_port
+  group_by: [src_ip, dst_ip]
+  window: 30s
+  operator: gt
+  value: 50
+dedupe:
+  per_group_cooldown: 1m
+description: >
+  单一源 IP 对单一目标 IP 在 30 秒内访问超过 50 个不同目的端口，
+  表现为端口扫描特征。
+tags: [tcp, scan]

@@ -1,0 +1,28 @@
+[package]
+name = "packetsage-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "PacketSage L1': the only sqlx entry point in the workspace"
+
+[dependencies]
+packetsage-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+# PostgreSQL support (ADR-004 / M3~M6 §6.5 matrix). Off by default because the
+# Windows build of `sqlx-postgres` pulls a dependency whose build script is
+# quarantined by some host AV products; enable with `--features postgres`.
+postgres = ["sqlx/postgres"]
+
+[lints]
+workspace = true

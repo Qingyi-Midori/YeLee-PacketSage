@@ -1,0 +1,23 @@
+id: NET-TCP-SYN-BURST-001
+version: 1
+name: TCP SYN 突发检测
+severity: high
+scope: packet
+match:
+  protocol: tcp
+  flags:
+    contains: [SYN]
+    excludes: [ACK]
+threshold:
+  metric: count
+  group_by: [src_ip]
+  window: 10s
+  operator: gt
+  value: 100
+dedupe:
+  per_group_cooldown: 1m
+description: >
+  单一源 IP 在 10 秒窗口内产生超过 100 个未完成 TCP SYN。
+  可能是端口扫描前置行为或 SYN Flood；本规则只给出结构化证据，
+  不宣称一定存在攻击。
+tags: [tcp, dos, scan]

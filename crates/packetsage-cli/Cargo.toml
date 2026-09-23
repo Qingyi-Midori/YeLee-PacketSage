@@ -1,0 +1,34 @@
+[package]
+name = "packetsage-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "PacketSage CLI: parameter parsing and assembly only"
+
+[[bin]]
+name = "packetsage"
+path = "src/main.rs"
+
+[build-dependencies]
+
+[dependencies]
+packetsage-protocol = { workspace = true }
+packetsage-core = { workspace = true }
+packetsage-rules = { workspace = true }
+packetsage-storage = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true

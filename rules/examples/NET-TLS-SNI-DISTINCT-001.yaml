@@ -1,0 +1,20 @@
+id: NET-TLS-SNI-DISTINCT-001
+version: 1
+name: TLS SNI 去重异常
+severity: low
+scope: packet
+match:
+  protocol: tcp
+threshold:
+  metric: distinct_count
+  field: tls.sni
+  group_by: [src_ip]
+  window: 1m
+  operator: gt
+  value: 100
+dedupe:
+  per_group_cooldown: 1m
+description: >
+  单一源 IP 在 1 分钟内访问超过 100 个不同 SNI。
+  注意：只统计单包可解析的 ClientHello，mid-stream 会话会静默欠计。
+tags: [tls, distinct]

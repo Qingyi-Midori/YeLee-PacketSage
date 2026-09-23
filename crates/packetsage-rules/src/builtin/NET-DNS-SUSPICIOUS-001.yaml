@@ -1,0 +1,22 @@
+id: NET-DNS-SUSPICIOUS-001
+version: 1
+name: DNS 高熵查询突发
+severity: medium
+scope: packet
+match:
+  protocol: udp
+  dst_port: 53
+  dns:
+    entropy_gt: 3.5
+threshold:
+  metric: count
+  group_by: [src_ip]
+  window: 1m
+  operator: gt
+  value: 200
+dedupe:
+  per_group_cooldown: 1m
+description: >
+  单一源 IP 在 1 分钟内发起超过 200 个高熵 DNS 查询。
+  可能是 DNS 隧道，也可能是合法 CDN 域名，因此报告只写 possible_dns_tunnel。
+tags: [dns, tunnel]

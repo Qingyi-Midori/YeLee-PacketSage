@@ -1,0 +1,6 @@
+# The desktop shell builds with the MSVC host toolchain (GUI 工程规格书 v0.2 §7.7):
+# the Tauri/webview stack needs the MSVC linker. The engine keeps its GNU build
+# for CLI users; the two are separate processes and never share a target dir.
+[toolchain]
+channel = "stable-x86_64-pc-windows-msvc"
+profile = "minimal"

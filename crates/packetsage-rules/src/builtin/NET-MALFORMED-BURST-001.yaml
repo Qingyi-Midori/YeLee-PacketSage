@@ -1,0 +1,19 @@
+id: NET-MALFORMED-BURST-001
+version: 1
+name: 畸形报文突发
+severity: low
+scope: packet
+match:
+  decode_layer: any
+threshold:
+  metric: count
+  group_by: [decode_code]
+  window: 10s
+  operator: gt
+  value: 500
+dedupe:
+  per_group_cooldown: 1m
+description: >
+  同一解码错误码在 10 秒内出现超过 500 次，提示文件截断、
+  链路类型不匹配或构造畸形流量。
+tags: [malformed]

@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+
+  python:
+    name: agent tests + CLI contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install pytest httpx jinja2 ruff mypy uv
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: python -m pip install -e ./agent
+      - name: ruff (G2-1)
+        working-directory: agent
+        run: python -m ruff check .
+      - name: GUI ruff (U8)
+        run: python -m ruff check gui tests/gui tests/sidecar --config gui/ruff.toml
+      - name: mypy (G2-2)
+        working-directory: agent
+        run: python -m mypy
+      - name: dependency lock is current (G2-3)
+        working-directory: agent
+        run: python -m uv lock --check
+      - name: pytest
+        working-directory: agent
+        run: python -m pytest -q
+      - name: CLI exit codes + three streams + doctor
+        run: python tests/cli/exit_codes.py --binary target/release/packetsage
+      - name: demo mainline (mock provider)
+        run: |
+          python scripts/gen_traffic.py --out samples/synth-mixed.pcap --packets 600 --profile mixed
+          python scripts/gen_traffic.py --out samples/synth-synflood.pcapng --format pcapng --packets 1500 --profile syn-flood
+          python tests/integration/demo_mainline.py --binary target/release/packetsage
+      - name: GUI contract S40-S45 (G1)
+        run: python tests/cli/gui_contract.py --binary target/release/packetsage
+      - name: sidecar protocol S57-S70 (U1)
+        run: python tests/sidecar/protocol_cases.py --binary target/release/packetsage
+      - name: GUI interface cases S57-S65 (U1-U8)
+        run: |
+          python -m pip install "streamlit>=1.40"
+          python tests/gui/app_cases.py --binary target/release/packetsage
+      - name: E1-E6 mock evaluation
+        run: python -m packetsage_agent.eval.run_eval --engine target/release/packetsage --capture samples/synth-mixed.pcap
+        env:
+          PYTHONPATH: agent
+      - name: db guardrails (§8)
+        run: |
+          ./target/release/packetsage db migrate --db sqlite://ci.db --yes
+          ./target/release/packetsage analyze samples/synth-mixed.pcap --db sqlite://ci.db
+          ./target/release/packetsage db query --readonly --db "sqlite://ci.db?mode=ro" \
+            --sql "SELECT id, packet_count FROM analysis_tasks"
+          ./target/release/packetsage db query --readonly --jsonl --db "sqlite://ci.db?mode=ro" \
+            --sql "SELECT name FROM sqlite_master ORDER BY name" | head -3
+          if ./target/release/packetsage db query --readonly --db sqlite://ci.db --sql "SELECT 1"; then
+            echo "expected the writable URL to be refused" >&2; exit 1
+          fi
+      - name: completions are idempotent
+        run: |
+          for shell in bash zsh fish powershell; do
+            ./target/release/packetsage completions "$shell" > "/tmp/c1.$shell"
+            ./target/release/packetsage completions "$shell" > "/tmp/c2.$shell"
+            cmp "/tmp/c1.$shell" "/tmp/c2.$shell"
+          done
+
+  msrv:
+    name: MSRV check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The workspace declares rust-version = 1.80; this job proves it builds
+      # there. Bump the pin only together with the declaration.
+      - uses: dtolnay/rust-toolchain@1.80.0
+      - run: cargo check --workspace
+
+  fuzz-smoke:
+    name: fuzz smoke (60s)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p packetsage-cli
+      - run: cargo run --release -p packetsage-fuzz --bin fuzz-smoke -- --seconds 60
+
+  install-from-scratch:
+    name: install from scratch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install the two entry points (§2.1/§2.2)
+        run: |
+          cargo install --path crates/packetsage-cli --locked || cargo install --path crates/packetsage-cli
+          python -m pip install -e ./agent
+      - name: entry points answer from any directory
+        working-directory: /tmp
+        run: |
+          packetsage version
+          packetsage version --json
+          packetsage-agent --help > /tmp/agent-help.txt
+          python -m packetsage_agent --help > /tmp/agent-help-module.txt
+          cmp /tmp/agent-help.txt /tmp/agent-help-module.txt
+      - name: doctor
+        run: |
+          packetsage doctor --rules-dir rules --samples-dir samples --no-net
+          packetsage doctor --json --no-net | python -c "import json,sys; d=json.load(sys.stdin); assert len(d['items'])==10, d"
+      - name: analyse a sample
+        run: |
+          python scripts/gen_traffic.py --out samples/smoke.pcap --packets 200 --profile mixed
+          packetsage analyze samples/smoke.pcap
+          packetsage analyze samples/smoke.pcap --jsonl | head -3
+
+  release-tarball:
+    name: release tarball (§12)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: cargo build --release
+      - name: package
+        run: python scripts/package_release.py --binary target/release/packetsage --out-dir dist
+      - name: smoke test the tarball in a clean directory
+        run: |
+          mkdir -p /tmp/unpacked && tar -xzf dist/packetsage-*.tar.gz -C /tmp/unpacked
+          cd /tmp/unpacked/packetsage-*
+          (cd / && sha256sum -c "$OLDPWD/SHA256SUMS" >/dev/null 2>&1) || sha256sum -c SHA256SUMS
+          test -f INSTALL.md
+          ./packetsage version
+          ./packetsage analyze /tmp/empty 2>/dev/null || test $? -eq 2
+          # tarball path has no Python agent: `chat` must fail with exit 3 and hint
+          ./packetsage chat ../nowhere.pcap > /dev/null 2> chat.err || test $? -eq 3
+          grep -q "PACKETSAGE_AGENT_BIN" chat.err
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packetsage-release
+          path: dist/*

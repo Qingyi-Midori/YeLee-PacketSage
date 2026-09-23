@@ -1,0 +1,10 @@
+# GUI 的 lint 面：与 `agent/pyproject.toml` 的 G2-1 用同一组规则族与行宽，
+# 只是 `src` 指向本目录（GUI 与 agent 是两个独立入口，各自一份配置）。
+#
+#   python -m ruff check gui --config gui/ruff.toml
+line-length = 100
+target-version = "py310"
+src = ["."]
+
+[lint]
+select = ["E4", "E7", "E9", "F", "W", "I", "UP", "B", "C4"]

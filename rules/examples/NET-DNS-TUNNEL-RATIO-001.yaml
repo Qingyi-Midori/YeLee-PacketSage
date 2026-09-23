@@ -1,0 +1,26 @@
+id: NET-DNS-TUNNEL-RATIO-001
+version: 1
+name: DNS 隧道比例检测
+severity: medium
+scope: packet
+match:
+  protocol: udp
+  # DNS 的 TXT 记录只出现在响应里，而响应的 53 端口在 src 侧；
+  # 因此这里用 src_port: 53 计响应（任一端口见 any_port/either_port 原语）。
+  src_port: 53
+threshold:
+  metric: ratio
+  field: dns.txt_len
+  field_gt: 100
+  group_by: [dst_ip]
+  window: 1m
+  operator: gt
+  value: 0.5
+dedupe:
+  per_group_cooldown: 1m
+description: >
+  窗口内超过一半的 DNS 响应带有超过 100 字节的 TXT 记录，
+  是 DNS 隧道的典型特征（分子子条件见 `field_gt`）。
+  因匹配的是响应，`group_by: [dst_ip]` 即按客户端（响应的接收方）分组；
+  若要同时覆盖查询与响应，请改用 `any_port: 53`（`either_port` 为别名）。
+tags: [dns, tunnel, ratio]
