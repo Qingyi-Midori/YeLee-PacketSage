@@ -49,6 +49,7 @@ import {
   type Tone,
 } from "./components";
 import { Wizard } from "./Wizard";
+import { humanDraft } from "./envelope";
 import { isRealTurn, orderTimeline, sanitizeTurns, type Turn } from "./session";
 import type {
   AgentEvent,
@@ -1072,13 +1073,18 @@ export default function App() {
    * 模型**正在写的正文**（时间线里那条"输出"泳道）——把它搬到结论的位置去显示：
    * 旧版它在时间线里往下长、写完却跳到结论区顶部，用户看到的是"字在下面，结论在上面"。
    * 只取正文，思考与工具参数仍旧留在时间线。
+   *
+   * 流过来的**是模型原文**（收尾信封那串 JSON），所以先过 `humanDraft()` 取人话：
+   * 不然正在写的那一段是 `{"summary": "…\n\n- 项"}`，Markdown 列表 / 标题都被
+   * `\n` 两个字面字符压成一整行（2026-09-24 实测）。取不到人话（本轮只写
+   * `findings`、或信封才开了个头）就返回空串，界面照旧显示"正在追查…"。
    */
   const liveDraft = (() => {
     const drafts = feed.filter(
       (item): item is Extract<FeedItem, { kind: "delta" }> =>
         item.kind === "delta" && item.channel === "content" && item.text.trim().length > 0,
     );
-    return drafts.length ? drafts[drafts.length - 1].text.trim() : "";
+    return drafts.length ? humanDraft(drafts[drafts.length - 1].text) : "";
   })();
   /**
    * 时间线只画"过程"：预取 / 思考 / 工具调用；结论与正文归结论区。

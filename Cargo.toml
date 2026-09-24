@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "4.1.4"
+version = "4.1.5"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/Qingyi-Midori/YeLee-PacketSage"

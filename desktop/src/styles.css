@@ -1510,9 +1510,28 @@ details.block[open] .caret {
   font-size: var(--fs-small);
 }
 
+/* 这条结论的模型原话走 Markdown 渲染，但**保持原来的小字号与紧凑**：
+   它在结论行里，不是第二段正文。 */
+.finding-detail .md {
+  margin-top: 0;
+  line-height: 1.6;
+}
+
+.finding-detail .md p,
+.finding-detail .md li {
+  font-size: var(--fs-small);
+}
+
 .finding-row-title {
   font-size: var(--fs-body);
   overflow-wrap: anywhere;
+}
+
+/* 短标题里的行内列表被摊平成一串（`MarkdownInline`），项之间给个分隔符。 */
+.md-inline-item + .md-inline-item::before {
+  content: "·";
+  margin: 0 4px;
+  color: var(--faint);
 }
 
 /* 模型自己说的那段话：**不加框**——它就是一条助手消息，落在结论上面。 */
@@ -1829,8 +1848,25 @@ details.tool[open] .caret {
   font-size: var(--fs-body);
 }
 
-.md ul {
-  padding-left: 1.2em;
+/*
+ * 列表缩进**有了一条规矩**（2026-09-24）：`ul` 与 `ol` 同一个 `padding-left`。
+ * 原来只有 `ul` 被写过（1.2em），`ol` 吃浏览器默认的 40px——同一段回答里
+ * "1." 比 "•" 深一截，看着像两级。
+ */
+.md ul,
+.md ol {
+  padding-left: 1.4em;
+  margin: var(--s1) 0;
+}
+
+.md li + li {
+  margin-top: 2px;
+}
+
+/* 子列表贴着父项，不要各带各的段间距。 */
+.md li > ul,
+.md li > ol {
+  margin: 2px 0;
 }
 
 .md code {
@@ -1840,10 +1876,83 @@ details.tool[open] .caret {
   border: 1px solid var(--line-soft);
   border-radius: 5px;
   padding: 0 4px;
+  /* `tc_*` 那种长锚点在窄栏里可以被折断，而不是把行顶出去。 */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * 围栏代码块（2026-09-24）：`pre > code` 原来只吃到行内 `code` 那条规则——
+ * 没有底色块、没有内边距、没有折行或滚动，一段两行的代码看起来是一排小药丸，
+ * 长行还会直接顶破版心。
+ */
+.md pre {
+  margin: var(--s2) 0;
+  padding: var(--s1) var(--s2);
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.md pre code {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+/* 链接：交互强调走中性（§5.1.1 第 9 条），所以不用状态蓝，只给下划线。 */
+.md a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--faint);
+}
+
+.md a:hover {
+  text-decoration-color: var(--text);
+}
+
+.md hr {
+  margin: var(--s3) 0;
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.md del {
+  color: var(--faint);
+}
+
+/* GFM 任务列表（`- [x]`）：方块跟着文字走，别把第一行顶下去。 */
+.md input[type="checkbox"] {
+  margin: 0 6px 0 0;
+  vertical-align: -1px;
+}
+
+/* 首尾不留空档：`.md` 自己已经在外面管好上下间距（卡片 / 右栏各一处）。 */
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+/* 宽表格自己横向滚，不把中栏或右栏撑破（`MarkdownView` 给它套了这层壳）。 */
+.md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .md table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-small);
   margin: var(--s2) 0;
@@ -1854,6 +1963,9 @@ details.tool[open] .caret {
   border: 1px solid var(--line-soft);
   padding: 4px 8px;
   text-align: left;
+  /* 长 IPv6 / 路径到这儿折行，表格才有收缩的余地（否则 max-content 会无限宽）。 */
+  max-width: 34ch;
+  overflow-wrap: anywhere;
 }
 
 .md th {

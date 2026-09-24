@@ -1,6 +1,6 @@
 [package]
 name = "packetsage-desktop"
-version = "4.1.4"
+version = "4.1.5"
 description = "PacketSage desktop shell: two sidecars (engine + agent) behind one native window"
 authors = ["YeLee' PacketSage"]
 edition = "2021"

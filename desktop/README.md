@@ -7,6 +7,7 @@ desktop/
 ├── index.html, src/            前端（React + TS + Vite + Tailwind）——界面与状态机
 │   ├── App.tsx                 桌面 Agent 版式：左栏 + 状态条 + 会话流 + 输入框
 │   ├── session.ts              会话流的纯逻辑：轮次装配（历史读回来先筛空壳）与时间线泳道次序
+│   ├── envelope.ts             收尾信封的纯逻辑：模型原文 → 人话（流式与收尾同一个口径）
 │   ├── components.tsx          会话流里的渲染件：结论卡 / 工具卡 / 证据链 / 报告（react-markdown）
 │   ├── Wizard.tsx              U7 首次运行向导（第 1 步就是 API Key）
 │   └── styles.css              四类面 + 四档字号/间距/圆角；状态只有绿蓝灰（+红/琥珀）

@@ -887,7 +887,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "packetsage-cli"
-version = "4.1.4"
+version = "4.1.5"
 dependencies = [
  "clap",
  "hex",
@@ -907,7 +907,7 @@ dependencies = [
 
 [[package]]
 name = "packetsage-core"
-version = "4.1.4"
+version = "4.1.5"
 dependencies = [
  "bytes",
  "etherparse",
@@ -925,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "packetsage-fuzz"
-version = "4.1.4"
+version = "4.1.5"
 dependencies = [
  "packetsage-core",
  "packetsage-protocol",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "packetsage-protocol"
-version = "4.1.4"
+version = "4.1.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "packetsage-rules"
-version = "4.1.4"
+version = "4.1.5"
 dependencies = [
  "etherparse",
  "hex",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "packetsage-storage"
-version = "4.1.4"
+version = "4.1.5"
 dependencies = [
  "async-trait",
  "packetsage-protocol",

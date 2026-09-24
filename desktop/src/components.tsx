@@ -9,7 +9,7 @@
  * 3. 结论、告警、空状态都用人的语言，`tc_*` 这类锚点默认截断、藏进展开项。
  */
 
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRef, useState } from "react";
 
@@ -133,10 +133,46 @@ export function MarkdownView({ text }: { text: string }) {
   });
   return (
     <div className="md">
-      <Markdown remarkPlugins={[remarkGfm]}>{localized}</Markdown>
+      <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+        {localized}
+      </Markdown>
     </div>
   );
 }
+
+/**
+ * 表格套一层横向滚动壳（2026-09-24）：报告的「主要会话」那种六列表，中栏还宽，
+ * 收进右栏（或把窗口拉到最小 1000×640）就顶破版心——`<table>` 自己是不会滚的。
+ * 其余元素一律吃 `styles.css` 里的 `.md` 规则，不再逐个接管。
+ */
+const MD_COMPONENTS: Components = {
+  table: ({ node, children, ...rest }) => (
+    <div className="md-table-wrap">
+      {/* `node` 是 react-markdown 塞进来的语法树节点，不能落到 DOM 上。 */}
+      <table {...rest}>{children}</table>
+    </div>
+  ),
+};
+
+/**
+ * 行内 Markdown：给"一句话的短标题"用（每条结论的 `finding.title` 是**模型写的**，
+ * 偶尔带 `**加粗**` 或反引号）。标题在布局里是行内元素，撑不起 `<p>` / `<ul>`，
+ * 所以这里只留行内语义、把块级标签摊平——不引入第二套排版。
+ */
+export function MarkdownInline({ text }: { text: string }) {
+  return (
+    <Markdown remarkPlugins={[remarkGfm]} components={INLINE_COMPONENTS}>
+      {text}
+    </Markdown>
+  );
+}
+
+const INLINE_COMPONENTS: Components = {
+  p: ({ children }) => <>{children}</>,
+  ul: ({ children }) => <>{children}</>,
+  ol: ({ children }) => <>{children}</>,
+  li: ({ children }) => <span className="md-inline-item">{children}</span>,
+};
 
 /** 九节标题的中英对照（只影响显示；报告文件本身不动）。 */
 const SECTION_ZH: Record<string, string> = {
@@ -253,10 +289,18 @@ export function FindingRow({
       <span className="dot" />
       <div className="finding-col">
         <div className="finding-row-main">
-          <span className="finding-row-title">{finding.title}</span>
+          <span className="finding-row-title">
+            <MarkdownInline text={finding.title} />
+          </span>
           {showBasis ? <span className="muted">{basis}</span> : null}
         </div>
-        {detail ? <p className="finding-detail muted">{detail}</p> : null}
+        {/* 这条结论的**原话也是模型写的**（引擎库里的 `finding.summary`），所以和
+            回答、报告走同一个渲染器：模型在这里写 `**加粗**` / 短列表时不该露原文。 */}
+        {detail ? (
+          <div className="finding-detail muted">
+            <MarkdownView text={detail} />
+          </div>
+        ) : null}
       </div>
       {evidenceCount ? (
         <button className="chip" onClick={onEvidence} title="看这条结论的证据">
@@ -632,7 +676,9 @@ export function FeedLine({ item, evidence }: { item: FeedItem; evidence?: React.
         <div className={`feed-finding finding-${item.finding.severity}`}>
           <LaneTag name="结论" />
           <span className="dot" />
-          <span className="finding-row-title">{item.finding.title}</span>
+          <span className="finding-row-title">
+            <MarkdownInline text={item.finding.title} />
+          </span>
           {bits.length ? <span className="muted">{bits.join(" · ")}</span> : null}
           <span className="spacer" />
           <SeverityBadge severity={item.finding.severity} />

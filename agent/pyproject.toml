@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "packetsage-agent"
-version = "4.1.4"
+version = "4.1.5"
 description = "YeLee' PacketSage agent: LLM tool orchestration over the Rust engine JSONL RPC"
 requires-python = ">=3.10"
 dependencies = [
